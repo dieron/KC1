@@ -9,6 +9,16 @@
 #include <Arduino.h>
 #include <Servo.h>
 
+// ========= Debug configuration =========
+// Set DEBUG_ENABLED to 0 to disable all Serial prints at compile time
+#ifndef DEBUG_ENABLED
+#define DEBUG_ENABLED 0
+#endif
+// DEBUG_STYLE: 0 = verbose (current), 1 = pseudo-graphics line
+#ifndef DEBUG_STYLE
+#define DEBUG_STYLE 0
+#endif
+
 // ========= Pin assignments =========
 // RC input pins (PORTD PCINT2 group: D4..D7)
 static const uint8_t CH1_YAW_PIN = 4; // PD4 / PCINT20
@@ -239,6 +249,125 @@ static void writeEscOutputsUs(uint16_t usL, uint16_t usR)
 	escR.writeMicroseconds(usR);
 }
 
+// ========= Debug helpers =========
+#if DEBUG_ENABLED
+static const __FlashStringHelper *modeName(Mode m)
+{
+	switch (m)
+	{
+	case MODE_DISARMED:
+		return F("DISARMED");
+	case MODE_NORMAL:
+		return F("NORMAL");
+	case MODE_AIR:
+		return F("AIR");
+	}
+	return F("?");
+}
+
+static void printDebugVerbose(const RcInputs &rc, Mode mode, bool armed, int16_t cmdL, int16_t cmdR)
+{
+	Serial.print(F("mode="));
+	Serial.print(modeName(mode));
+	Serial.print(F(" armed="));
+	Serial.print(armed ? F("1") : F("0"));
+	Serial.print(F(" | in(us): yaw="));
+	Serial.print((int)rc.usYaw);
+	Serial.print(F(" thr="));
+	Serial.print((int)rc.usThr);
+	Serial.print(F(" nrm="));
+	Serial.print((int)rc.usBtnNorm);
+	Serial.print(F(" air="));
+	Serial.print((int)rc.usBtnAir);
+	Serial.print(F(" | in(\u00B1): yaw="));
+	Serial.print((int)rc.yaw);
+	Serial.print(F(" thr="));
+	Serial.print((int)rc.thr);
+	Serial.print(F(" | set: yaw="));
+	Serial.print((int)g_airYawSet);
+	Serial.print(F(" thr="));
+	Serial.print((int)g_airThrSet);
+
+	uint16_t usL = mapSigned1000ToUs(cmdL);
+	uint16_t usR = mapSigned1000ToUs(cmdR);
+	Serial.print(F(" | out(us): L="));
+	Serial.print((int)usL);
+	Serial.print(F(" R="));
+	Serial.print((int)usR);
+	Serial.println();
+}
+
+static void printDebugPseudo(const RcInputs &rc, Mode mode, bool armed, int16_t cmdL, int16_t cmdR)
+{
+	// Pseudo-graphics: single compact line with mode, buttons, motor direction/speed
+	// Direction: '<' for reverse, '>' for forward; magnitude as -1000..+1000 and bar size
+	static uint8_t lastLen = 0; // track last printed length for padding
+	auto printMotor = [](const __FlashStringHelper *label, int16_t cmd)
+	{
+		int16_t v = cmd;
+		if (v > 1000)
+			v = 1000;
+		if (v < -1000)
+			v = -1000;
+		int16_t mag = v < 0 ? -v : v;
+		uint8_t bars = (uint8_t)((mag + 49) / 100); // 0..10 roughly
+		Serial.print(label);
+		Serial.print(v >= 0 ? F("+") : F("-"));
+		Serial.print((int)mag);
+		Serial.print(F(" "));
+		if (v < 0)
+		{
+			for (uint8_t i = 0; i < bars; ++i)
+				Serial.print('<');
+		}
+		else if (v > 0)
+		{
+			for (uint8_t i = 0; i < bars; ++i)
+				Serial.print('>');
+		}
+		else
+		{
+			Serial.print('-');
+		}
+	};
+
+	// Header
+	// Example: [AIR][ARM][N:1 A:0] L:+350 >>> R:-120 <<
+	// Start with carriage return to overwrite the same line in terminal
+	Serial.print('\r');
+	uint8_t count = 0;
+	Serial.print(F("["));
+	count += 1;
+	Serial.print(mode == MODE_DISARMED ? F("DIS") : (mode == MODE_NORMAL ? F("NRM") : F("AIR")));
+	count += 3;
+	Serial.print(F("]"));
+	count += 1;
+	Serial.print(armed ? F("[ARM]") : F("[DIS]"));
+	count += 5;
+	Serial.print(F("[N:"));
+	count += 3;
+	Serial.print(rc.btnNormal ? F("1") : F("0"));
+	count += 1;
+	Serial.print(F(" A:"));
+	count += 3;
+	Serial.print(rc.btnAir ? F("1") : F("0"));
+	count += 1;
+	Serial.print(F("] "));
+	count += 2;
+
+	// We cannot easily count chars inside printMotor; just print, then pad.
+	printMotor(F("L:"), cmdL);
+	Serial.print(F(" "));
+	printMotor(F("R:"), cmdR);
+
+	// Pad with spaces if current line is shorter than previous
+	// Emit several spaces and a carriage return next time will overwrite them
+	// A simple fixed pad ensures clearing leftovers
+	Serial.print(F("                    ")); // 20 spaces padding
+	lastLen = count;						 // tracked in case of future refinements
+}
+#endif // DEBUG_ENABLED
+
 // ========= Setup & loop =========
 void setup()
 {
@@ -339,6 +468,8 @@ void loop()
 	if (!g_armed)
 	{
 		writeEscOutputsUs(1500, 1500);
+		cmdL = 0; // reflect neutral in debug
+		cmdR = 0;
 	}
 	else
 	{
@@ -367,60 +498,17 @@ void loop()
 		writeEscOutputsUs(usL, usR);
 	}
 
+#if DEBUG_ENABLED
 	// Debug at ~5 Hz
 	uint32_t nowDbg = millis();
 	if (nowDbg - lastDebugMs >= 200)
 	{
 		lastDebugMs = nowDbg;
-		Serial.print(F("mode="));
-		switch (g_mode)
-		{
-		case MODE_DISARMED:
-			Serial.print(F("DISARMED"));
-			break;
-		case MODE_NORMAL:
-			Serial.print(F("NORMAL"));
-			break;
-		case MODE_AIR:
-			Serial.print(F("AIR"));
-			break;
-		}
-		Serial.print(F(" armed="));
-		Serial.print(g_armed ? F("1") : F("0"));
-		Serial.print(F(" | in(us): yaw="));
-		Serial.print((int)rc.usYaw);
-		Serial.print(F(" thr="));
-		Serial.print((int)rc.usThr);
-		Serial.print(F(" nrm="));
-		Serial.print((int)rc.usBtnNorm);
-		Serial.print(F(" air="));
-		Serial.print((int)rc.usBtnAir);
-		Serial.print(F(" | in(\u00B1): yaw="));
-		Serial.print((int)rc.yaw);
-		Serial.print(F(" thr="));
-		Serial.print((int)rc.thr);
-		Serial.print(F(" | set: yaw="));
-		Serial.print((int)g_airYawSet);
-		Serial.print(F(" thr="));
-		Serial.print((int)g_airThrSet);
-		// Report latest outputs (read back from last write)
-		// For simplicity re-compute when armed else 1000
-		if (g_armed)
-		{
-			int16_t dbgL = 0, dbgR = 0;
-			if (g_mode == MODE_NORMAL)
-				mixDifferential(rc.thr, rc.yaw, dbgL, dbgR);
-			else if (g_mode == MODE_AIR)
-				mixDifferential(g_airThrSet, g_airYawSet, dbgL, dbgR);
-			Serial.print(F(" | out(us): L="));
-			Serial.print((int)mapSigned1000ToUs(dbgL));
-			Serial.print(F(" R="));
-			Serial.print((int)mapSigned1000ToUs(dbgR));
-		}
-		else
-		{
-			Serial.print(F(" | out(us): L=1500 R=1500"));
-		}
-		Serial.println();
+#if DEBUG_STYLE == 0
+		printDebugVerbose(rc, g_mode, g_armed, cmdL, cmdR);
+#else
+		printDebugPseudo(rc, g_mode, g_armed, cmdL, cmdR);
+#endif
 	}
+#endif
 }
