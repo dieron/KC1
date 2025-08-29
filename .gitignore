@@ -1,0 +1,32 @@
+# PlatformIO build output
+.pio/
+.pioenvs/
+.piolibdeps/
+.cache/
+
+# VS Code (keep only recommended extensions file)
+.vscode/*
+!.vscode/extensions.json
+
+# IDE project files
+.idea/
+
+# Editor/Language server caches
+.vscode/ipch/
+.vscode/.browse.c_cpp.db*
+compile_commands.json
+.clangd
+
+# OS junk
+.DS_Store
+Thumbs.db
+
+# Temp files
+*.swp
+*.swo
+*.tmp
+*.log
+*.bak
+
+# Optional: local workspace files
+*.code-workspace
