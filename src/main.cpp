@@ -265,6 +265,7 @@ static const __FlashStringHelper *modeName(Mode m)
 	return F("?");
 }
 
+#if DEBUG_STYLE == 0
 static void printDebugVerbose(const RcInputs &rc, Mode mode, bool armed, int16_t cmdL, int16_t cmdR)
 {
 	Serial.print(F("mode="));
@@ -296,12 +297,12 @@ static void printDebugVerbose(const RcInputs &rc, Mode mode, bool armed, int16_t
 	Serial.print((int)usR);
 	Serial.println();
 }
+#endif // DEBUG_STYLE == 0
 
 static void printDebugPseudo(const RcInputs &rc, Mode mode, bool armed, int16_t cmdL, int16_t cmdR)
 {
 	// Pseudo-graphics: single compact line with mode, buttons, motor direction/speed
 	// Direction: '<' for reverse, '>' for forward; magnitude as -1000..+1000 and bar size
-	static uint8_t lastLen = 0; // track last printed length for padding
 	auto printMotor = [](const __FlashStringHelper *label, int16_t cmd)
 	{
 		int16_t v = cmd;
@@ -355,16 +356,25 @@ static void printDebugPseudo(const RcInputs &rc, Mode mode, bool armed, int16_t 
 	Serial.print(F("] "));
 	count += 2;
 
-	// We cannot easily count chars inside printMotor; just print, then pad.
+	// We cannot easily count chars inside printMotor; just print, then append raw values and pad.
 	printMotor(F("L:"), cmdL);
 	Serial.print(F(" "));
 	printMotor(F("R:"), cmdR);
+
+	// Append raw channel values for inspection
+	Serial.print(F(" | raw(us) Y:"));
+	Serial.print((int)rc.usYaw);
+	Serial.print(F(" T:"));
+	Serial.print((int)rc.usThr);
+	Serial.print(F(" N:"));
+	Serial.print((int)rc.usBtnNorm);
+	Serial.print(F(" A:"));
+	Serial.print((int)rc.usBtnAir);
 
 	// Pad with spaces if current line is shorter than previous
 	// Emit several spaces and a carriage return next time will overwrite them
 	// A simple fixed pad ensures clearing leftovers
 	Serial.print(F("                    ")); // 20 spaces padding
-	lastLen = count;						 // tracked in case of future refinements
 }
 #endif // DEBUG_ENABLED
 
@@ -401,35 +411,66 @@ static void disarm()
 
 static void maybeArmOrSwitchMode(const RcInputs &rc)
 {
-	// Arm only when sticks centered and a mode button is pressed
+	// Toggle-based event detection on CH3/CH4 (>500us change counts as a click)
+	static bool init = false;
+	static uint16_t lastNormUs = 0, lastAirUs = 0;
+	const uint16_t TOGGLE_DELTA_US = 500; // strictly >500 requested
+
+	if (!init)
+	{
+		lastNormUs = rc.usBtnNorm;
+		lastAirUs = rc.usBtnAir;
+		init = true;
+		return;
+	}
+
+	int normDiff = (int)rc.usBtnNorm - (int)lastNormUs;
+	int airDiff = (int)rc.usBtnAir - (int)lastAirUs;
+	bool normToggled = (normDiff > (int)TOGGLE_DELTA_US) || (normDiff < -(int)TOGGLE_DELTA_US);
+	bool airToggled = (airDiff > (int)TOGGLE_DELTA_US) || (airDiff < -(int)TOGGLE_DELTA_US);
+
+	// Update last seen values for next call
+	lastNormUs = rc.usBtnNorm;
+	lastAirUs = rc.usBtnAir;
+
+	// If both toggled in the same cycle, ignore to avoid conflicting actions
+	if (normToggled && airToggled)
+		return;
+
 	bool sticksCentered = (abs(rc.yaw) == 0 && abs(rc.thr) == 0);
+
 	if (!g_armed)
 	{
-		if (sticksCentered && (rc.btnNormal || rc.btnAir))
+		if (sticksCentered && (normToggled || airToggled))
 		{
-			g_mode = rc.btnAir ? MODE_AIR : MODE_NORMAL;
+			g_mode = airToggled ? MODE_AIR : MODE_NORMAL;
 			g_armed = true;
 			// Latch current (near zero) setpoints for Air mode
 			g_airYawSet = rc.yaw;
 			g_airThrSet = rc.thr;
+#if DEBUG_ENABLED && (DEBUG_STYLE == 0)
 			Serial.println(F("ARMED"));
+#endif
 		}
 	}
 	else
 	{
-		// Allow switching modes on button press
-		if (rc.btnAir && g_mode != MODE_AIR)
+		if (airToggled && g_mode != MODE_AIR)
 		{
 			g_mode = MODE_AIR;
 			// Initialize setpoints from current commands to avoid jump
 			g_airYawSet = rc.yaw;
 			g_airThrSet = rc.thr;
+#if DEBUG_ENABLED && (DEBUG_STYLE == 0)
 			Serial.println(F("MODE -> AIR"));
+#endif
 		}
-		else if (rc.btnNormal && g_mode != MODE_NORMAL)
+		else if (normToggled && g_mode != MODE_NORMAL)
 		{
 			g_mode = MODE_NORMAL;
+#if DEBUG_ENABLED && (DEBUG_STYLE == 0)
 			Serial.println(F("MODE -> NORMAL"));
+#endif
 		}
 	}
 }
@@ -454,7 +495,9 @@ void loop()
 	{
 		if (g_armed)
 		{
+#if DEBUG_ENABLED && (DEBUG_STYLE == 0)
 			Serial.println(F("RC STALE -> DISARM"));
+#endif
 		}
 		disarm();
 	}
