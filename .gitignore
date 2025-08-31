@@ -30,3 +30,4 @@ Thumbs.db
 
 # Optional: local workspace files
 *.code-workspace
+.vscode/extensions.json
