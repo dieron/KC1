@@ -19,6 +19,26 @@
 #define DEBUG_STYLE 0
 #endif
 
+// ========= Output configuration =========
+// Set motor direction reversal (1 = reverse, 0 = normal)
+#ifndef REVERSE_LEFT
+#define REVERSE_LEFT 0
+#endif
+#ifndef REVERSE_RIGHT
+#define REVERSE_RIGHT 0
+#endif
+
+// Exponential curve for motor output, 0..1000 (0 = linear, 1000 = strong expo)
+#ifndef MOTOR_EXPO
+#define MOTOR_EXPO 400
+#endif
+#ifndef MOTOR_EXPO_L
+#define MOTOR_EXPO_L MOTOR_EXPO
+#endif
+#ifndef MOTOR_EXPO_R
+#define MOTOR_EXPO_R MOTOR_EXPO
+#endif
+
 // ========= Failsafe tuning =========
 // Enable heuristic: if yaw and throttle stay exactly stable (within 1us) for a long window, treat as TX loss
 #ifndef FAILSAFE_STUCK_THR
@@ -166,6 +186,25 @@ static inline int16_t applyDeadband(int16_t v, int16_t db)
 	if (v > -db && v < db)
 		return 0;
 	return v;
+}
+
+// Apply exponential curve while preserving endpoints and sign.
+// expo: 0..1000, where 0 = linear, 1000 blends fully to cubic (center softer, ends stronger)
+static inline int16_t applyExpoSigned1000(int16_t v, uint16_t expo)
+{
+	if (expo == 0)
+		return v;
+	if (v == 0)
+		return 0;
+	int32_t x = v;						 // -1000..1000
+	int32_t x3 = (x * x * x) / 1000000L; // divide by 1000^2 to keep scale
+	// y = x*(1 - e) + x^3 * e, with e in [0..1] scaled by 1000
+	int32_t y = (x * (int32_t)(1000 - expo) + x3 * (int32_t)expo) / 1000;
+	if (y > 1000)
+		y = 1000;
+	else if (y < -1000)
+		y = -1000;
+	return (int16_t)y;
 }
 
 // ========= Mode & mixing =========
@@ -643,6 +682,14 @@ void loop()
 				cmdR = 0;
 				break;
 			}
+
+			// Apply output shaping: exponential and optional reversal
+			cmdL = applyExpoSigned1000(cmdL, MOTOR_EXPO_L);
+			cmdR = applyExpoSigned1000(cmdR, MOTOR_EXPO_R);
+			if (REVERSE_LEFT)
+				cmdL = -cmdL;
+			if (REVERSE_RIGHT)
+				cmdR = -cmdR;
 
 			uint16_t usL = mapSigned1000ToUs(cmdL);
 			uint16_t usR = mapSigned1000ToUs(cmdR);
