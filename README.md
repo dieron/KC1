@@ -19,12 +19,15 @@ Note: All code in this repository was authored with the help of GitHub Copilot a
 - ESC outputs at 50 Hz using Servo (Timer1), on pins:
   - Left ESC: D9
   - Right ESC: D10
+- Output shaping
+  - Per‑motor direction reversal flags
+  - Adjustable exponential response curve (0 = linear, 1000 = strong expo)
 - Safety
   - Powers up Disarmed and drives both ESCs at neutral (1500 µs)
   - Arming requires sticks centered and a CH3/CH4 toggle event (> ~500 µs change)
   - While armed, CH3/CH4 toggles switch modes
   - RC‑stale detection with debounce disarms to neutral
-  - Optional “neutral‑hold” heuristic for receivers that keep outputting fixed failsafe values (see Failsafe notes)
+  - Built‑in “neutral‑hold” heuristic for receivers that keep outputting fixed failsafe values (see Failsafe notes)
 - Debug
   - Compile‑time selectable debug: verbose or single‑line pseudo‑graphics
   - Pseudo‑graphics prints mode/armed/buttons/motor bars and raw channel microseconds on a single terminal line
@@ -60,7 +63,7 @@ Note: All code in this repository was authored with the help of GitHub Copilot a
 - RC‑stale: If CH1/CH2 pulses stop updating, the controller disarms to neutral (debounced to avoid spurious trips).
 - Receivers that output fixed failsafe values: Some PWM receivers continue outputting “default” values when the transmitter is off, so true loss can’t be inferred from pulse presence alone. Options:
   1. Configure the receiver to put a dedicated channel at a unique failsafe value (e.g., < 950 µs) and wire it for explicit disarm.
-  2. Enable the optional neutral‑hold heuristic that holds both motors at 1500 µs when yaw+throttle are unchanged for an extended time, without disarming. Ask if you want this enabled by default.
+  2. Use the built‑in neutral‑hold heuristic that holds both motors at 1500 µs when yaw+throttle are essentially unchanged for an extended time, without disarming. This is enabled by default and can be turned off via a build flag (see below).
 - Protocols like SBUS/IBUS/CRSF provide an explicit failsafe bit and are more robust; can be added later.
 
 ## Debugging output
@@ -69,6 +72,8 @@ Note: All code in this repository was authored with the help of GitHub Copilot a
   - `DEBUG_ENABLED=1` enables debug prints.
   - `DEBUG_STYLE=0` verbose multi‑line; `DEBUG_STYLE=1` pseudo‑graphics single‑line.
 - Pseudo‑graphics renders one compact line refreshed with a carriage return. It shows mode, armed state, button states, motor bars, and raw Y/T/N/A microseconds.
+
+Current defaults in `platformio.ini` set `DEBUG_ENABLED=1` and `DEBUG_STYLE=1` (pseudo‑graphics on by default). Adjust as needed.
 
 ## Build and upload (PlatformIO)
 
@@ -82,8 +87,39 @@ Note: All code in this repository was authored with the help of GitHub Copilot a
 
 ## Tuning
 
-- Deadband, Air mode gain per cycle, and failsafe thresholds are defined as constants/macros in `src/main.cpp`.
-- Ask if you want them exposed in `platformio.ini` build flags for easy tweaking.
+- Deadband, Air mode gain per cycle, output shaping, and failsafe thresholds are defined as macros in `src/main.cpp` and can be overridden via PlatformIO build flags.
+
+### Configuration via build flags
+
+You can change behavior without editing code by updating `build_flags` in `platformio.ini`.
+
+- Debug
+  - `DEBUG_ENABLED` = 0/1 (default 0 in code; currently 1 in `platformio.ini`)
+  - `DEBUG_STYLE` = 0 verbose, 1 pseudo‑graphics (default 0; currently 1)
+- Output shaping
+  - `REVERSE_LEFT`, `REVERSE_RIGHT` = 0 normal, 1 reverse (default 0; currently both 1)
+  - `MOTOR_EXPO` = 0..1000 global expo (default 400)
+  - `MOTOR_EXPO_L`, `MOTOR_EXPO_R` override per‑motor expo (default inherit `MOTOR_EXPO`)
+- Failsafe heuristic for constant outputs
+  - `FAILSAFE_STUCK_THR` = 0/1 enable neutral‑hold (default 1 = enabled)
+  - `STUCK_DELTA_US` = microsecond tolerance to treat as “unchanged” (default 1)
+  - `STUCK_CYCLES` = consecutive 20 ms cycles before neutral‑hold engages (default ~75 ≈ 1.5 s)
+
+Example `platformio.ini` snippet (current):
+
+```ini
+[env:uno]
+platform = atmelavr
+board = uno
+framework = arduino
+lib_deps = arduino-libraries/Servo
+build_flags = \
+  -D DEBUG_ENABLED=1 \
+  -D DEBUG_STYLE=1 \
+  -D REVERSE_LEFT=1 \
+  -D REVERSE_RIGHT=1 \
+  -D MOTOR_EXPO=400
+```
 
 ## Disclaimer
 
