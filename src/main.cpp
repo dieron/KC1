@@ -169,6 +169,7 @@ static Mode g_mode = MODE_DISARMED;
 static bool g_armed = false;
 static int16_t g_airYawSet = 0; // -1000..1000 (latched)
 static int16_t g_airThrSet = 0; // -1000..1000 (latched)
+static bool g_skipAirUpdateOnce = false; // when true, skip one Air update to enforce neutral immediately
 
 // Tuning
 static const int16_t DEAD_CENTER = 50;		  // deadband for center
@@ -455,22 +456,38 @@ static void maybeArmOrSwitchMode(const RcInputs &rc)
 	}
 	else
 	{
-		if (airToggled && g_mode != MODE_AIR)
+		if (airToggled)
 		{
-			g_mode = MODE_AIR;
-			// Initialize setpoints from current commands to avoid jump
-			g_airYawSet = rc.yaw;
-			g_airThrSet = rc.thr;
+			if (g_mode == MODE_AIR)
+			{
+				// Reset both motors to neutral in Air mode
+				g_airYawSet = 0;
+				g_airThrSet = 0;
+				g_skipAirUpdateOnce = true; // ensure neutral holds for this cycle
 #if DEBUG_ENABLED && (DEBUG_STYLE == 0)
-			Serial.println(F("MODE -> AIR"));
+				Serial.println(F("AIR -> NEUTRAL"));
 #endif
+			}
+			else
+			{
+				g_mode = MODE_AIR;
+				// Initialize setpoints from current commands to avoid jump
+				g_airYawSet = rc.yaw;
+				g_airThrSet = rc.thr;
+#if DEBUG_ENABLED && (DEBUG_STYLE == 0)
+				Serial.println(F("MODE -> AIR"));
+#endif
+			}
 		}
-		else if (normToggled && g_mode != MODE_NORMAL)
+		else if (normToggled)
 		{
-			g_mode = MODE_NORMAL;
+			if (g_mode != MODE_NORMAL)
+			{
+				g_mode = MODE_NORMAL;
 #if DEBUG_ENABLED && (DEBUG_STYLE == 0)
-			Serial.println(F("MODE -> NORMAL"));
+				Serial.println(F("MODE -> NORMAL"));
 #endif
+			}
 		}
 	}
 }
@@ -526,7 +543,15 @@ void loop()
 		case MODE_AIR:
 		{
 			// Update setpoints incrementally from stick deflection
-			updateAirSetpoints(rc.thr, rc.yaw);
+			if (g_skipAirUpdateOnce)
+			{
+				// Skip one update so neutral takes effect immediately
+				g_skipAirUpdateOnce = false;
+			}
+			else
+			{
+				updateAirSetpoints(rc.thr, rc.yaw);
+			}
 			mixDifferential(g_airThrSet, g_airYawSet, cmdL, cmdR);
 			break;
 		}
