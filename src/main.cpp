@@ -19,6 +19,18 @@
 #define DEBUG_STYLE 0
 #endif
 
+// ========= Failsafe tuning =========
+// Enable heuristic: if yaw and throttle stay exactly stable (within 1us) for a long window, treat as TX loss
+#ifndef FAILSAFE_STUCK_THR
+#define FAILSAFE_STUCK_THR 1
+#endif
+#ifndef STUCK_DELTA_US
+#define STUCK_DELTA_US 1
+#endif
+#ifndef STUCK_CYCLES
+#define STUCK_CYCLES 75 // ~1.5s at 20ms loop
+#endif
+
 // ========= Pin assignments =========
 // RC input pins (PORTD PCINT2 group: D4..D7)
 static const uint8_t CH1_YAW_PIN = 4; // PD4 / PCINT20
@@ -34,6 +46,8 @@ static const uint8_t ESC_R_PIN = 10; // PB2 / OC1B
 // Volatile data shared with ISR
 volatile uint16_t g_pulseWidthUs[4] = {1500, 1500, 1000, 1000};
 volatile uint32_t g_riseTimeUs[4] = {0, 0, 0, 0};
+volatile uint32_t g_prevRiseUs[4] = {0, 0, 0, 0};
+volatile uint32_t g_lastFrameUs[4] = {0, 0, 0, 0}; // last time we observed a plausible PWM frame period
 volatile uint8_t g_lastPortD = 0;
 volatile uint32_t g_lastUpdateUs[4] = {0, 0, 0, 0};
 
@@ -68,6 +82,17 @@ ISR(PCINT2_vect)
 			{
 				// Rising edge
 				g_riseTimeUs[idx] = nowUs;
+				// Detect plausible frame period (~50 Hz => ~20 ms). Use a generous range 8-40 ms
+				uint32_t prev = g_prevRiseUs[idx];
+				if (prev != 0)
+				{
+					uint32_t period = nowUs - prev;
+					if (period >= 8000UL && period <= 40000UL)
+					{
+						g_lastFrameUs[idx] = nowUs;
+					}
+				}
+				g_prevRiseUs[idx] = nowUs;
 			}
 			else
 			{
@@ -167,9 +192,10 @@ struct RcInputs
 // Global state
 static Mode g_mode = MODE_DISARMED;
 static bool g_armed = false;
-static int16_t g_airYawSet = 0; // -1000..1000 (latched)
-static int16_t g_airThrSet = 0; // -1000..1000 (latched)
+static int16_t g_airYawSet = 0;			 // -1000..1000 (latched)
+static int16_t g_airThrSet = 0;			 // -1000..1000 (latched)
 static bool g_skipAirUpdateOnce = false; // when true, skip one Air update to enforce neutral immediately
+static bool g_holdFailsafe = false;		 // constant-signal heuristic: hold motors neutral without disarming
 
 // Tuning
 static const int16_t DEAD_CENTER = 50;		  // deadband for center
@@ -192,15 +218,57 @@ static RcInputs readRc()
 	r.btnNormal = r.usBtnNorm > 1500;
 	r.btnAir = r.usBtnAir > 1500;
 
+	// Validity: require yaw/throttle pulses to be fresh; ignore buttons for validity
 	bool fresh = true;
-	for (uint8_t i = 0; i < 4; ++i)
+	if (getSinceUpdateUs(0) > (uint32_t)STALE_TIMEOUT_MS * 1000UL)
+		fresh = false; // yaw
+	if (getSinceUpdateUs(1) > (uint32_t)STALE_TIMEOUT_MS * 1000UL)
+		fresh = false; // thr
+
+#if FAILSAFE_STUCK_THR
+	// Heuristic: if both yaw and throttle are effectively unchanged for a long time, activate neutral-hold failsafe
+	static uint16_t lastThrUs = 0, lastYawUs = 0;
+	static uint16_t thrStable = 0, yawStable = 0;
+	if (lastThrUs == 0)
 	{
-		if (getSinceUpdateUs(i) > (uint32_t)STALE_TIMEOUT_MS * 1000UL)
-		{
-			fresh = false;
-			break;
-		}
+		lastThrUs = r.usThr;
 	}
+	if (lastYawUs == 0)
+	{
+		lastYawUs = r.usYaw;
+	}
+
+	if ((uint16_t)abs((int)r.usThr - (int)lastThrUs) <= STUCK_DELTA_US)
+	{
+		if (thrStable < 0xFFFF)
+			thrStable++;
+	}
+	else
+	{
+		thrStable = 0;
+	}
+	if ((uint16_t)abs((int)r.usYaw - (int)lastYawUs) <= STUCK_DELTA_US)
+	{
+		if (yawStable < 0xFFFF)
+			yawStable++;
+	}
+	else
+	{
+		yawStable = 0;
+	}
+
+	lastThrUs = r.usThr;
+	lastYawUs = r.usYaw;
+
+	if (thrStable >= STUCK_CYCLES && yawStable >= STUCK_CYCLES)
+	{
+		g_holdFailsafe = true;
+	}
+	else
+	{
+		g_holdFailsafe = false;
+	}
+#endif
 	r.valid = fresh;
 	return r;
 }
@@ -251,26 +319,25 @@ static void writeEscOutputsUs(uint16_t usL, uint16_t usR)
 }
 
 // ========= Debug helpers =========
-#if DEBUG_ENABLED
-static const __FlashStringHelper *modeName(Mode m)
-{
-	switch (m)
-	{
-	case MODE_DISARMED:
-		return F("DISARMED");
-	case MODE_NORMAL:
-		return F("NORMAL");
-	case MODE_AIR:
-		return F("AIR");
-	}
-	return F("?");
-}
-
-#if DEBUG_STYLE == 0
+#if DEBUG_ENABLED && (DEBUG_STYLE == 0)
 static void printDebugVerbose(const RcInputs &rc, Mode mode, bool armed, int16_t cmdL, int16_t cmdR)
 {
 	Serial.print(F("mode="));
-	Serial.print(modeName(mode));
+	switch (mode)
+	{
+	case MODE_DISARMED:
+		Serial.print(F("DISARMED"));
+		break;
+	case MODE_NORMAL:
+		Serial.print(F("NORMAL"));
+		break;
+	case MODE_AIR:
+		Serial.print(F("AIR"));
+		break;
+	default:
+		Serial.print(F("?"));
+		break;
+	}
 	Serial.print(F(" armed="));
 	Serial.print(armed ? F("1") : F("0"));
 	Serial.print(F(" | in(us): yaw="));
@@ -298,8 +365,9 @@ static void printDebugVerbose(const RcInputs &rc, Mode mode, bool armed, int16_t
 	Serial.print((int)usR);
 	Serial.println();
 }
-#endif // DEBUG_STYLE == 0
+#endif // DEBUG_ENABLED && DEBUG_STYLE == 0
 
+#if DEBUG_ENABLED
 static void printDebugPseudo(const RcInputs &rc, Mode mode, bool armed, int16_t cmdL, int16_t cmdR)
 {
 	// Pseudo-graphics: single compact line with mode, buttons, motor direction/speed
@@ -371,7 +439,6 @@ static void printDebugPseudo(const RcInputs &rc, Mode mode, bool armed, int16_t 
 	Serial.print((int)rc.usBtnNorm);
 	Serial.print(F(" A:"));
 	Serial.print((int)rc.usBtnAir);
-
 	// Pad with spaces if current line is shorter than previous
 	// Emit several spaces and a carriage return next time will overwrite them
 	// A simple fixed pad ensures clearing leftovers
@@ -496,6 +563,7 @@ void loop()
 {
 	static uint32_t nextTickMs = 0;
 	static uint32_t lastDebugMs = 0;
+	static uint8_t invalidCount = 0; // debounce invalid RC
 
 	uint32_t nowMs = millis();
 	if (nowMs < nextTickMs)
@@ -507,19 +575,25 @@ void loop()
 
 	RcInputs rc = readRc();
 
-	// Failsafe if RC stale
+	// Failsafe with debounce on invalid RC
 	if (!rc.valid)
 	{
-		if (g_armed)
+		if (invalidCount < 3)
+			invalidCount++;
+		if (invalidCount >= 3)
 		{
+			if (g_armed)
+			{
 #if DEBUG_ENABLED && (DEBUG_STYLE == 0)
-			Serial.println(F("RC STALE -> DISARM"));
+				Serial.println(F("RC STALE -> DISARM"));
 #endif
+			}
+			disarm();
 		}
-		disarm();
 	}
 	else
 	{
+		invalidCount = 0;
 		maybeArmOrSwitchMode(rc);
 	}
 
@@ -533,37 +607,47 @@ void loop()
 	}
 	else
 	{
-		switch (g_mode)
+		if (g_holdFailsafe)
 		{
-		case MODE_NORMAL:
-		{
-			mixDifferential(rc.thr, rc.yaw, cmdL, cmdR);
-			break;
-		}
-		case MODE_AIR:
-		{
-			// Update setpoints incrementally from stick deflection
-			if (g_skipAirUpdateOnce)
-			{
-				// Skip one update so neutral takes effect immediately
-				g_skipAirUpdateOnce = false;
-			}
-			else
-			{
-				updateAirSetpoints(rc.thr, rc.yaw);
-			}
-			mixDifferential(g_airThrSet, g_airYawSet, cmdL, cmdR);
-			break;
-		}
-		default:
+			// Hold neutral outputs without changing setpoints
+			writeEscOutputsUs(1500, 1500);
 			cmdL = 0;
 			cmdR = 0;
-			break;
 		}
+		else
+		{
+			switch (g_mode)
+			{
+			case MODE_NORMAL:
+			{
+				mixDifferential(rc.thr, rc.yaw, cmdL, cmdR);
+				break;
+			}
+			case MODE_AIR:
+			{
+				// Update setpoints incrementally from stick deflection
+				if (g_skipAirUpdateOnce)
+				{
+					// Skip one update so neutral takes effect immediately
+					g_skipAirUpdateOnce = false;
+				}
+				else
+				{
+					updateAirSetpoints(rc.thr, rc.yaw);
+				}
+				mixDifferential(g_airThrSet, g_airYawSet, cmdL, cmdR);
+				break;
+			}
+			default:
+				cmdL = 0;
+				cmdR = 0;
+				break;
+			}
 
-		uint16_t usL = mapSigned1000ToUs(cmdL);
-		uint16_t usR = mapSigned1000ToUs(cmdR);
-		writeEscOutputsUs(usL, usR);
+			uint16_t usL = mapSigned1000ToUs(cmdL);
+			uint16_t usR = mapSigned1000ToUs(cmdR);
+			writeEscOutputsUs(usL, usR);
+		}
 	}
 
 #if DEBUG_ENABLED
