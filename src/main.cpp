@@ -8,6 +8,10 @@
 
 #include <Arduino.h>
 #include <Servo.h>
+// Compass / IMU
+#include <Wire.h>
+#include <Adafruit_BNO055.h>
+#include <utility/imumaths.h>
 
 // ========= Debug configuration =========
 // Set DEBUG_ENABLED to 0 to disable all Serial prints at compile time
@@ -39,6 +43,43 @@
 #define MOTOR_EXPO_R MOTOR_EXPO
 #endif
 
+// ========= Heading hold (BNO055) =========
+#ifndef HEADHOLD_ENABLED
+#define HEADHOLD_ENABLED 1
+#endif
+// Deadband for heading error before correction (degrees)
+#ifndef HEADING_DEADBAND_DEG
+#define HEADING_DEADBAND_DEG 5.0f
+#endif
+// PID gains for heading error -> yaw command (-1000..1000 scale)
+#ifndef HEAD_KP
+#define HEAD_KP 3.5f
+#endif
+#ifndef HEAD_KI
+#define HEAD_KI 0.05f
+#endif
+#ifndef HEAD_KD
+#define HEAD_KD 0.8f
+#endif
+// Clamp for PID output (command units -1000..1000)
+#ifndef HEAD_CMD_MAX
+#define HEAD_CMD_MAX 600.0f
+#endif
+// Thresholds for speed regimes based on average |cmd| (0..1000)
+#ifndef SPEED_ZERO_THRESH
+#define SPEED_ZERO_THRESH 50 // consider 0 if both motors within +/-50
+#endif
+#ifndef SPEED_HIGH_FRAC
+#define SPEED_HIGH_FRAC 0.80f // >=80% considered high speed
+#endif
+// Spin-in-place min/max when speed ~ 0
+#ifndef SPIN_CMD_MIN
+#define SPIN_CMD_MIN 220
+#endif
+#ifndef SPIN_CMD_MAX
+#define SPIN_CMD_MAX 700
+#endif
+
 // ========= Failsafe tuning =========
 // Enable heuristic: if yaw and throttle stay exactly stable (within 1us) for a long window, treat as TX loss
 #ifndef FAILSAFE_STUCK_THR
@@ -57,6 +98,8 @@ static const uint8_t CH1_YAW_PIN = 4; // PD4 / PCINT20
 static const uint8_t CH2_THR_PIN = 5; // PD5 / PCINT21
 static const uint8_t CH3_NRM_PIN = 6; // PD6 / PCINT22
 static const uint8_t CH4_AIR_PIN = 7; // PD7 / PCINT23
+// Additional RC input on PORTB (PCINT0 group): D8 for Heading Hold
+static const uint8_t CH5_HOLD_PIN = 8; // PB0 / PCINT0
 
 // ESC outputs (Timer1 capable pins for Servo lib)
 static const uint8_t ESC_L_PIN = 9;	 // PB1 / OC1A
@@ -64,18 +107,20 @@ static const uint8_t ESC_R_PIN = 10; // PB2 / OC1B
 
 // ========= RC capture (ISR) =========
 // Volatile data shared with ISR
-volatile uint16_t g_pulseWidthUs[4] = {1500, 1500, 1000, 1000};
-volatile uint32_t g_riseTimeUs[4] = {0, 0, 0, 0};
-volatile uint32_t g_prevRiseUs[4] = {0, 0, 0, 0};
-volatile uint32_t g_lastFrameUs[4] = {0, 0, 0, 0}; // last time we observed a plausible PWM frame period
+volatile uint16_t g_pulseWidthUs[5] = {1500, 1500, 1000, 1000, 1000};
+volatile uint32_t g_riseTimeUs[5] = {0, 0, 0, 0, 0};
+volatile uint32_t g_prevRiseUs[5] = {0, 0, 0, 0, 0};
+volatile uint32_t g_lastFrameUs[5] = {0, 0, 0, 0, 0}; // last time we observed a plausible PWM frame period
 volatile uint8_t g_lastPortD = 0;
-volatile uint32_t g_lastUpdateUs[4] = {0, 0, 0, 0};
+volatile uint8_t g_lastPortB = 0;
+volatile uint32_t g_lastUpdateUs[5] = {0, 0, 0, 0, 0};
 
 // Bit masks for D4..D7
 static const uint8_t MASK_CH1 = _BV(PD4);
 static const uint8_t MASK_CH2 = _BV(PD5);
 static const uint8_t MASK_CH3 = _BV(PD6);
 static const uint8_t MASK_CH4 = _BV(PD7);
+static const uint8_t MASK_CH5 = _BV(PB0);
 
 static inline void pcint2Enable()
 {
@@ -83,6 +128,14 @@ static inline void pcint2Enable()
 	PCICR |= _BV(PCIE2);
 	// Enable PCINT for PD4..PD7 (PCINT20..23)
 	PCMSK2 |= _BV(PCINT20) | _BV(PCINT21) | _BV(PCINT22) | _BV(PCINT23);
+}
+
+static inline void pcint0Enable()
+{
+	// Enable Pin Change Interrupts for PORTB (PCIE0)
+	PCICR |= _BV(PCIE0);
+	// Enable PCINT for PB0 (PCINT0)
+	PCMSK0 |= _BV(PCINT0);
 }
 
 ISR(PCINT2_vect)
@@ -135,6 +188,47 @@ ISR(PCINT2_vect)
 	handleEdge(MASK_CH2, 1);
 	handleEdge(MASK_CH3, 2);
 	handleEdge(MASK_CH4, 3);
+}
+
+ISR(PCINT0_vect)
+{
+	uint8_t nowB = PINB; // read PORTB snapshot
+	uint8_t changed = nowB ^ g_lastPortB;
+	g_lastPortB = nowB;
+
+	uint32_t nowUs = micros();
+
+	if (changed & MASK_CH5)
+	{
+		uint8_t idx = 4; // CH5 index
+		if (nowB & MASK_CH5)
+		{
+			g_riseTimeUs[idx] = nowUs;
+			uint32_t prev = g_prevRiseUs[idx];
+			if (prev != 0)
+			{
+				uint32_t period = nowUs - prev;
+				if (period >= 8000UL && period <= 40000UL)
+				{
+					g_lastFrameUs[idx] = nowUs;
+				}
+			}
+			g_prevRiseUs[idx] = nowUs;
+		}
+		else
+		{
+			uint32_t start = g_riseTimeUs[idx];
+			if (start != 0)
+			{
+				uint32_t w = nowUs - start;
+				if (w >= 800 && w <= 2500)
+				{
+					g_pulseWidthUs[idx] = (uint16_t)w;
+					g_lastUpdateUs[idx] = nowUs;
+				}
+			}
+		}
+	}
 }
 
 // Safe copy of RC pulse width in microseconds
@@ -221,10 +315,12 @@ struct RcInputs
 	uint16_t usThr;		// CH2
 	uint16_t usBtnNorm; // CH3
 	uint16_t usBtnAir;	// CH4
+	uint16_t usBtnHold; // CH5 (heading hold)
 	int16_t yaw;		// -1000..1000
 	int16_t thr;		// -1000..1000
 	bool btnNormal;		// >1500us
 	bool btnAir;		// >1500us
+	bool btnHold;		// >1500us
 	bool valid;			// all channels fresh
 };
 
@@ -235,6 +331,178 @@ static int16_t g_airYawSet = 0;			 // -1000..1000 (latched)
 static int16_t g_airThrSet = 0;			 // -1000..1000 (latched)
 static bool g_skipAirUpdateOnce = false; // when true, skip one Air update to enforce neutral immediately
 static bool g_holdFailsafe = false;		 // constant-signal heuristic: hold motors neutral without disarming
+
+#if HEADHOLD_ENABLED
+// BNO055 and heading-hold state
+static Adafruit_BNO055 g_bno = Adafruit_BNO055(55, 0x28);
+static bool g_bnoOk = false;
+static bool g_headingHoldActive = false;
+static float g_headingTargetDeg = 0.0f; // 0..360
+static float g_headErrInt = 0.0f;
+static float g_headPrevErr = 0.0f;
+static uint32_t g_headLastMs = 0;
+
+static float normalizeAngleDeg(float a)
+{
+	while (a >= 360.0f)
+		a -= 360.0f;
+	while (a < 0.0f)
+		a += 360.0f;
+	return a;
+}
+
+static float shortestDiffDeg(float target, float current)
+{
+	float diff = normalizeAngleDeg(target) - normalizeAngleDeg(current);
+	if (diff > 180.0f)
+		diff -= 360.0f;
+	if (diff < -180.0f)
+		diff += 360.0f;
+	return diff;
+}
+
+static bool bnoBeginAuto()
+{
+	if (g_bno.begin())
+		return true;
+	Adafruit_BNO055 alt(55, 0x29);
+	if (alt.begin())
+	{
+		g_bno = alt;
+		return true;
+	}
+	return false;
+}
+
+static bool readHeadingDeg(float &headingOut)
+{
+	if (!g_bnoOk)
+		return false;
+	imu::Vector<3> euler = g_bno.getVector(Adafruit_BNO055::VECTOR_EULER);
+	float h = euler.x();
+	if (isnan(h))
+		return false;
+	headingOut = normalizeAngleDeg(h);
+	return true;
+}
+
+static float headingPidStep(float errDeg, float dtSec)
+{
+	// Integrator with light decay to reduce residual bias
+	g_headErrInt += errDeg * dtSec;
+	// When error is within half the deadband, bleed off integral quickly
+	if (fabsf(errDeg) <= (HEADING_DEADBAND_DEG * 0.5f))
+	{
+		g_headErrInt *= 0.7f; // decay towards 0
+		if (fabsf(errDeg) < 0.2f)
+		{
+			g_headErrInt = 0.0f; // essentially aligned
+		}
+	}
+	float iMax = (HEAD_KI > 0.0f) ? (HEAD_CMD_MAX / HEAD_KI) : 0.0f;
+	if (HEAD_KI > 0.0f)
+	{
+		if (g_headErrInt > iMax)
+			g_headErrInt = iMax;
+		else if (g_headErrInt < -iMax)
+			g_headErrInt = -iMax;
+	}
+	float d = (dtSec > 0.0f) ? ((errDeg - g_headPrevErr) / dtSec) : 0.0f;
+	g_headPrevErr = errDeg;
+	float out = HEAD_KP * errDeg + HEAD_KI * g_headErrInt + HEAD_KD * d;
+	if (out > HEAD_CMD_MAX)
+		out = HEAD_CMD_MAX;
+	else if (out < -HEAD_CMD_MAX)
+		out = -HEAD_CMD_MAX;
+	return out;
+}
+
+static void applyHeadingHoldIfNeeded(int16_t &cmdL, int16_t &cmdR)
+{
+	if (!g_headingHoldActive || !g_bnoOk)
+		return;
+	// Preserve base (pre-correction) commands so we can restore them when error is small
+	int16_t baseL = cmdL;
+	int16_t baseR = cmdR;
+	float heading;
+	if (!readHeadingDeg(heading))
+		return;
+	float err = shortestDiffDeg(g_headingTargetDeg, heading);
+	float aerr = fabsf(err);
+
+	uint32_t nowMs = millis();
+	float dt = (g_headLastMs == 0) ? 0.02f : (nowMs - g_headLastMs) / 1000.0f;
+	g_headLastMs = nowMs;
+
+	// Evaluate current output magnitude before deciding actions
+	int16_t avgMag = (abs(cmdL) + abs(cmdR)) / 2;
+	float frac = avgMag / 1000.0f;
+
+	// Near-zero error handling: bleed integrator and RESTORE base outputs
+	if (aerr <= HEADING_DEADBAND_DEG)
+	{
+		// Run integrator decay via PID step with tiny dt to keep state consistent
+		(void)headingPidStep(err, dt);
+		// Restore original pre-correction outputs so Air setpoints are respected
+		cmdL = baseL;
+		cmdR = baseR;
+		return;
+	}
+
+	float yawCmdF = headingPidStep(err, dt);
+	int16_t yawCmd = (int16_t)yawCmdF;
+	// Avoid tiny bias from noise
+	if (yawCmd > -20 && yawCmd < 20)
+		yawCmd = 0;
+
+	if (avgMag <= SPEED_ZERO_THRESH)
+	{
+		int16_t spinMag = abs(yawCmd);
+		if (spinMag < SPIN_CMD_MIN)
+			spinMag = SPIN_CMD_MIN;
+		if (spinMag > SPIN_CMD_MAX)
+			spinMag = SPIN_CMD_MAX;
+		if (yawCmd > 0)
+		{
+			cmdL = spinMag;
+			cmdR = -spinMag;
+		}
+		else
+		{
+			cmdL = -spinMag;
+			cmdR = spinMag;
+		}
+	}
+	else if (frac >= SPEED_HIGH_FRAC)
+	{
+		int16_t reduce = abs(yawCmd);
+		if (reduce > 800)
+			reduce = 800;
+		if (yawCmd > 0)
+		{
+			cmdR -= reduce;
+		}
+		else
+		{
+			cmdL -= reduce;
+		}
+	}
+	else
+	{
+		cmdL += yawCmd;
+		cmdR -= yawCmd;
+	}
+
+	if (cmdL > 1000)
+		cmdL = 1000;
+	else if (cmdL < -1000)
+		cmdL = -1000;
+	if (cmdR > 1000)
+		cmdR = 1000;
+	else if (cmdR < -1000)
+		cmdR = -1000;
+}
+#endif // HEADHOLD_ENABLED
 
 // Tuning
 static const int16_t DEAD_CENTER = 50;		  // deadband for center
@@ -251,11 +519,13 @@ static RcInputs readRc()
 	r.usThr = getPulseWidthUs(1);
 	r.usBtnNorm = getPulseWidthUs(2);
 	r.usBtnAir = getPulseWidthUs(3);
+	r.usBtnHold = getPulseWidthUs(4);
 
 	r.yaw = applyDeadband(mapUsToSigned1000(r.usYaw), DEAD_CENTER);
 	r.thr = applyDeadband(mapUsToSigned1000(r.usThr), DEAD_CENTER);
 	r.btnNormal = r.usBtnNorm > 1500;
 	r.btnAir = r.usBtnAir > 1500;
+	r.btnHold = r.usBtnHold > 1500;
 
 	// Validity: require yaw/throttle pulses to be fresh; ignore buttons for validity
 	bool fresh = true;
@@ -402,6 +672,38 @@ static void printDebugVerbose(const RcInputs &rc, Mode mode, bool armed, int16_t
 	Serial.print((int)usL);
 	Serial.print(F(" R="));
 	Serial.print((int)usR);
+
+#if HEADHOLD_ENABLED
+	Serial.print(F(" | hdg:"));
+	Serial.print(g_headingHoldActive ? F("ON") : F("OFF"));
+	if (g_bnoOk)
+	{
+		float h;
+		if (readHeadingDeg(h))
+		{
+			// Always show current heading; add target+error when hold is active
+			Serial.print(F(" cur="));
+			Serial.print(h);
+			if (g_headingHoldActive)
+			{
+				float err = g_headingTargetDeg - h;
+				if (err > 180.0f)
+					err -= 360.0f;
+				else if (err < -180.0f)
+					err += 360.0f;
+				Serial.print(F(" tgt="));
+				Serial.print(g_headingTargetDeg);
+				Serial.print(F(" err="));
+				Serial.print(err);
+			}
+		}
+		else
+		{
+			Serial.print(F(" cur=?"));
+		}
+	}
+#endif
+
 	Serial.println();
 }
 #endif // DEBUG_ENABLED && DEBUG_STYLE == 0
@@ -461,6 +763,10 @@ static void printDebugPseudo(const RcInputs &rc, Mode mode, bool armed, int16_t 
 	count += 3;
 	Serial.print(rc.btnAir ? F("1") : F("0"));
 	count += 1;
+	Serial.print(F(" H:"));
+	count += 3;
+	Serial.print(rc.btnHold ? F("1") : F("0"));
+	count += 1;
 	Serial.print(F("] "));
 	count += 2;
 
@@ -469,8 +775,8 @@ static void printDebugPseudo(const RcInputs &rc, Mode mode, bool armed, int16_t 
 	Serial.print(F(" "));
 	printMotor(F("R:"), cmdR);
 
-	// Append raw channel values for inspection
-	Serial.print(F(" | raw(us) Y:"));
+	// Append raw channel values for inspection (short labels to avoid wrapping)
+	Serial.print(F(" | Y:"));
 	Serial.print((int)rc.usYaw);
 	Serial.print(F(" T:"));
 	Serial.print((int)rc.usThr);
@@ -478,10 +784,46 @@ static void printDebugPseudo(const RcInputs &rc, Mode mode, bool armed, int16_t 
 	Serial.print((int)rc.usBtnNorm);
 	Serial.print(F(" A:"));
 	Serial.print((int)rc.usBtnAir);
+	Serial.print(F(" H:"));
+	Serial.print((int)rc.usBtnHold);
 	// Pad with spaces if current line is shorter than previous
 	// Emit several spaces and a carriage return next time will overwrite them
 	// A simple fixed pad ensures clearing leftovers
-	Serial.print(F("                    ")); // 20 spaces padding
+
+#if HEADHOLD_ENABLED
+	// Append heading information briefly to avoid wrapping
+	Serial.print(F(" | H:"));
+	Serial.print(g_headingHoldActive ? F("ON ") : F("OFF "));
+	if (g_bnoOk)
+	{
+		float h;
+		if (readHeadingDeg(h))
+		{
+			Serial.print(h, 1);
+			if (g_headingHoldActive)
+			{
+				float err = g_headingTargetDeg - h;
+				if (err > 180.0f)
+					err -= 360.0f;
+				else if (err < -180.0f)
+					err += 360.0f;
+				Serial.print(F("/"));
+				Serial.print(g_headingTargetDeg, 1);
+				Serial.print(F(" e="));
+				Serial.print(err, 1);
+			}
+		}
+		else
+		{
+			Serial.print(F("?"));
+		}
+	}
+	else
+	{
+		Serial.print(F("N/A"));
+	}
+#endif
+	// Keep the line short to minimize wrapping; no large fixed padding
 }
 #endif // DEBUG_ENABLED
 
@@ -496,15 +838,37 @@ void setup()
 	pinMode(CH2_THR_PIN, INPUT);
 	pinMode(CH3_NRM_PIN, INPUT);
 	pinMode(CH4_AIR_PIN, INPUT);
+	pinMode(CH5_HOLD_PIN, INPUT);
 
 	// Initialize ISR state
 	g_lastPortD = PIND;
+	g_lastPortB = PINB;
 	pcint2Enable();
+	pcint0Enable();
 
 	// Attach ESCs at 50Hz (Servo uses Timer1)
 	escL.attach(ESC_L_PIN, 1000, 2000);
 	escR.attach(ESC_R_PIN, 1000, 2000);
 	writeEscOutputsUs(1500, 1500); // disarmed neutral
+
+#if HEADHOLD_ENABLED
+	// Initialize BNO055
+	Wire.begin();
+	g_bnoOk = bnoBeginAuto();
+	if (g_bnoOk)
+	{
+		g_bno.setExtCrystalUse(true);
+#if DEBUG_ENABLED && (DEBUG_STYLE == 0)
+		Serial.println(F("BNO055 OK"));
+#endif
+	}
+	else
+	{
+#if DEBUG_ENABLED && (DEBUG_STYLE == 0)
+		Serial.println(F("BNO055 NOT FOUND"));
+#endif
+	}
+#endif
 }
 
 static void disarm()
@@ -514,34 +878,41 @@ static void disarm()
 	g_airYawSet = 0;
 	g_airThrSet = 0;
 	writeEscOutputsUs(1500, 1500);
+#if HEADHOLD_ENABLED
+	g_headingHoldActive = false;
+#endif
 }
 
 static void maybeArmOrSwitchMode(const RcInputs &rc)
 {
-	// Toggle-based event detection on CH3/CH4 (>500us change counts as a click)
+	// Toggle-based event detection on CH3/CH4/CH5 (>500us change counts as a click)
 	static bool init = false;
-	static uint16_t lastNormUs = 0, lastAirUs = 0;
+	static uint16_t lastNormUs = 0, lastAirUs = 0, lastHoldUs = 0;
 	const uint16_t TOGGLE_DELTA_US = 500; // strictly >500 requested
 
 	if (!init)
 	{
 		lastNormUs = rc.usBtnNorm;
 		lastAirUs = rc.usBtnAir;
+		lastHoldUs = rc.usBtnHold;
 		init = true;
 		return;
 	}
 
 	int normDiff = (int)rc.usBtnNorm - (int)lastNormUs;
 	int airDiff = (int)rc.usBtnAir - (int)lastAirUs;
+	int holdDiff = (int)rc.usBtnHold - (int)lastHoldUs;
 	bool normToggled = (normDiff > (int)TOGGLE_DELTA_US) || (normDiff < -(int)TOGGLE_DELTA_US);
 	bool airToggled = (airDiff > (int)TOGGLE_DELTA_US) || (airDiff < -(int)TOGGLE_DELTA_US);
+	bool holdToggled = (holdDiff > (int)TOGGLE_DELTA_US) || (holdDiff < -(int)TOGGLE_DELTA_US);
 
 	// Update last seen values for next call
 	lastNormUs = rc.usBtnNorm;
 	lastAirUs = rc.usBtnAir;
+	lastHoldUs = rc.usBtnHold;
 
-	// If both toggled in the same cycle, ignore to avoid conflicting actions
-	if (normToggled && airToggled)
+	// If multiple toggles in the same cycle, ignore to avoid conflicting actions
+	if ((normToggled && airToggled) || (normToggled && holdToggled) || (airToggled && holdToggled))
 		return;
 
 	bool sticksCentered = (abs(rc.yaw) == 0 && abs(rc.thr) == 0);
@@ -559,42 +930,81 @@ static void maybeArmOrSwitchMode(const RcInputs &rc)
 			Serial.println(F("ARMED"));
 #endif
 		}
+		return;
 	}
-	else
+
+	if (airToggled)
 	{
-		if (airToggled)
+		if (g_mode == MODE_AIR)
 		{
-			if (g_mode == MODE_AIR)
-			{
-				// Reset both motors to neutral in Air mode
-				g_airYawSet = 0;
-				g_airThrSet = 0;
-				g_skipAirUpdateOnce = true; // ensure neutral holds for this cycle
+			// Reset both motors to neutral in Air mode
+			g_airYawSet = 0;
+			g_airThrSet = 0;
+			g_skipAirUpdateOnce = true; // ensure neutral holds for this cycle
 #if DEBUG_ENABLED && (DEBUG_STYLE == 0)
-				Serial.println(F("AIR -> NEUTRAL"));
+			Serial.println(F("AIR -> NEUTRAL"));
+#endif
+		}
+		else
+		{
+			g_mode = MODE_AIR;
+			// Initialize setpoints from current commands to avoid jump
+			g_airYawSet = rc.yaw;
+			g_airThrSet = rc.thr;
+#if DEBUG_ENABLED && (DEBUG_STYLE == 0)
+			Serial.println(F("MODE -> AIR"));
+#endif
+		}
+		return;
+	}
+
+	if (normToggled)
+	{
+		if (g_mode != MODE_NORMAL)
+		{
+			g_mode = MODE_NORMAL;
+#if DEBUG_ENABLED && (DEBUG_STYLE == 0)
+			Serial.println(F("MODE -> NORMAL"));
+#endif
+		}
+		return;
+	}
+
+	if (holdToggled)
+	{
+#if HEADHOLD_ENABLED
+		// Toggle heading hold in both NORMAL and AIR
+		g_headingHoldActive = !g_headingHoldActive;
+		if (g_headingHoldActive)
+		{
+			float h;
+			if (readHeadingDeg(h))
+			{
+				g_headingTargetDeg = h;
+				g_headErrInt = 0.0f;
+				g_headPrevErr = 0.0f;
+				g_headLastMs = millis();
+#if DEBUG_ENABLED && (DEBUG_STYLE == 0)
+				Serial.print(F("HDG HOLD ON target="));
+				Serial.println(g_headingTargetDeg);
 #endif
 			}
 			else
 			{
-				g_mode = MODE_AIR;
-				// Initialize setpoints from current commands to avoid jump
-				g_airYawSet = rc.yaw;
-				g_airThrSet = rc.thr;
+				g_headingHoldActive = false; // cannot enable without a heading
 #if DEBUG_ENABLED && (DEBUG_STYLE == 0)
-				Serial.println(F("MODE -> AIR"));
+				Serial.println(F("HDG HOLD FAILED (no heading)"));
 #endif
 			}
 		}
-		else if (normToggled)
+		else
 		{
-			if (g_mode != MODE_NORMAL)
-			{
-				g_mode = MODE_NORMAL;
 #if DEBUG_ENABLED && (DEBUG_STYLE == 0)
-				Serial.println(F("MODE -> NORMAL"));
+			Serial.println(F("HDG HOLD OFF"));
 #endif
-			}
 		}
+#endif
+		return;
 	}
 }
 
@@ -682,6 +1092,11 @@ void loop()
 				cmdR = 0;
 				break;
 			}
+
+			// Apply heading-hold correction before expo and reversal
+#if HEADHOLD_ENABLED
+			applyHeadingHoldIfNeeded(cmdL, cmdR);
+#endif
 
 			// Apply output shaping: exponential and optional reversal
 			cmdL = applyExpoSigned1000(cmdL, MOTOR_EXPO_L);

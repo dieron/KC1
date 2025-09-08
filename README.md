@@ -22,6 +22,10 @@ Note: All code in this repository was authored with the help of GitHub Copilot a
 - Output shaping
   - Per‑motor direction reversal flags
   - Adjustable exponential response curve (0 = linear, 1000 = strong expo)
+- Heading Hold (BNO055 compass)
+  - Toggle while in Normal mode using CH3 to capture current heading and maintain it
+  - Speed‑aware corrections: spin in place at zero speed, reduce one motor at high speed, or adjust both at mid speeds
+  - PID‑based yaw correction with tunable gains and deadband
 - Safety
   - Powers up Disarmed and drives both ESCs at neutral (1500 µs)
   - Arming requires sticks centered and a CH3/CH4 toggle event (> ~500 µs change)
@@ -43,6 +47,9 @@ Note: All code in this repository was authored with the help of GitHub Copilot a
 - ESC signal wires:
   - Left ESC → D9
   - Right ESC → D10
+- BNO055 (I2C):
+  - SDA → A4, SCL → A5 (Uno)
+  - Power: 3.3V (preferred) and GND; set address 0x28 (default) or 0x29
 - Common ground between Arduino, receiver, and ESC BEC(s) is required.
 
 ## Quick manual
@@ -55,6 +62,7 @@ Note: All code in this repository was authored with the help of GitHub Copilot a
 - While armed:
   - Toggle CH3 or CH4 to switch modes.
   - In Air mode, clicking CH4 again returns both motors to neutral immediately for one cycle.
+  - In Normal mode, clicking CH3 again toggles Heading Hold. When turning ON, current heading is captured as the target.
 - Disarm:
   - Automatic on RC‑stale detection (see Failsafe), or power cycle.
 
@@ -78,7 +86,7 @@ Current defaults in `platformio.ini` set `DEBUG_ENABLED=1` and `DEBUG_STYLE=1` (
 ## Build and upload (PlatformIO)
 
 - Requirements: PlatformIO (VS Code extension) with an Arduino Uno environment.
-- This repo includes `platformio.ini` with the Servo library dependency.
+- This repo includes `platformio.ini` with the Servo and Adafruit BNO055 dependencies.
 - Steps (VS Code):
   1. Open the workspace folder.
   2. PlatformIO: Project Tasks → Build.
@@ -100,6 +108,14 @@ You can change behavior without editing code by updating `build_flags` in `platf
   - `REVERSE_LEFT`, `REVERSE_RIGHT` = 0 normal, 1 reverse (default 0; currently both 1)
   - `MOTOR_EXPO` = 0..1000 global expo (default 400)
   - `MOTOR_EXPO_L`, `MOTOR_EXPO_R` override per‑motor expo (default inherit `MOTOR_EXPO`)
+- Heading Hold (BNO055)
+  - `HEADHOLD_ENABLED` = 0/1 to include heading‑hold (default 1)
+  - `HEADING_DEADBAND_DEG` = degrees of error with no correction (default 5.0)
+  - `HEAD_KP`, `HEAD_KI`, `HEAD_KD` = PID gains (default 2.0 / 0.10 / 0.0)
+  - `HEAD_CMD_MAX` = max yaw correction magnitude (default 400)
+  - `SPEED_ZERO_THRESH` = treat as stopped if avg |cmd| <= this (default 50)
+  - `SPEED_HIGH_FRAC` = fraction of max where we consider “high speed” (default 0.80)
+  - `SPIN_CMD_MIN`, `SPIN_CMD_MAX` = bounds when spinning in place (default 180 / 700)
 - Failsafe heuristic for constant outputs
   - `FAILSAFE_STUCK_THR` = 0/1 enable neutral‑hold (default 1 = enabled)
   - `STUCK_DELTA_US` = microsecond tolerance to treat as “unchanged” (default 1)
@@ -113,6 +129,8 @@ platform = atmelavr
 board = uno
 framework = arduino
 lib_deps = arduino-libraries/Servo
+            adafruit/Adafruit BNO055
+            adafruit/Adafruit Unified Sensor
 build_flags = \
   -D DEBUG_ENABLED=1 \
   -D DEBUG_STYLE=1 \
