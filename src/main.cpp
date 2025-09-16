@@ -282,6 +282,11 @@ static float g_headingTargetDeg = 0.0f; // 0..360
 static float g_headErrInt = 0.0f;
 static float g_headPrevErr = 0.0f;
 static uint32_t g_headLastMs = 0;
+// Telemetry: last commanded motor values (signed command domain and microseconds)
+static int16_t g_lastCmdL = 0;
+static int16_t g_lastCmdR = 0;
+static uint16_t g_lastUsL = 1500;
+static uint16_t g_lastUsR = 1500;
 
 static float normalizeAngleDeg(float a)
 {
@@ -769,11 +774,582 @@ static void printDebugPseudo(const RcInputs &rc, Mode mode, bool armed, int16_t 
 #endif // DEBUG_ENABLED
 
 // ========= Setup & loop =========
+// ---- Serial command parser (minimal skeleton) ----
+// Line buffer (small to save RAM). Commands terminated by \n or \r.
+static char g_lineBuf[64];
+static uint8_t g_lineLen = 0;
+
+// Case-insensitive compare (ASCII); returns 0 if equal.
+static int icmp(const char *a, const char *b)
+{
+	while (*a && *b)
+	{
+		char ca = *a;
+		char cb = *b;
+		if (ca >= 'A' && ca <= 'Z')
+			ca += 32;
+		if (cb >= 'A' && cb <= 'Z')
+			cb += 32;
+		if (ca != cb)
+			return (int)(uint8_t)ca - (int)(uint8_t)cb;
+		++a;
+		++b;
+	}
+	return (int)(uint8_t)*a - (int)(uint8_t)*b;
+}
+
+// Skip leading spaces; return pointer to first token; also null-terminate after token.
+static char *nextToken(char *&cursor)
+{
+	if (!cursor)
+		return nullptr;
+	while (*cursor == ' ' || *cursor == '\t')
+		++cursor;
+	if (*cursor == 0)
+		return nullptr;
+	char *start = cursor;
+	while (*cursor && *cursor != ' ' && *cursor != '\t')
+		++cursor;
+	if (*cursor)
+	{
+		*cursor = 0;
+		++cursor;
+	}
+	return start;
+}
+
+static void replyOk() { Serial.println(F("OK")); }
+static void replyErr(const __FlashStringHelper *msg)
+{
+	Serial.print(F("ERR: "));
+	Serial.println(msg);
+}
+
+static void cmdHelp()
+{
+	Serial.println(F("Commands:"));
+	Serial.println(F("  HELP - list commands"));
+	Serial.println(F("  CFG LIST - list all config params"));
+	Serial.println(F("  CFG GET <name> - read one param"));
+	Serial.println(F("  CFG SET <name> <val> - set param (auto-save)"));
+	Serial.println(F("  CFG RESET - restore factory defaults"));
+	Serial.println(F("  CFG SAVE - force EEPROM save"));
+	Serial.println(F("  TELEM STATUS - system status"));
+	Serial.println(F("  TELEM RC - raw + mapped RC inputs"));
+	Serial.println(F("  TELEM MOTORS - last motor commands"));
+	Serial.println(F("  TELEM HEADING - current/target/error"));
+	Serial.println(F("  TELEM ALL - combined snapshot"));
+	Serial.println(F("  HEAD ON - enable heading hold (capture current)"));
+	Serial.println(F("  HEAD OFF - disable heading hold"));
+	Serial.println(F("  HEAD SET <deg> - set target to value"));
+	Serial.println(F("  HEAD TARGET - report current target"));
+}
+
+static void cmdCfgList()
+{
+	ConfigStore::list(Serial); // prints in format name=value (one per line)
+}
+
+static void cmdCfgGet(char *name)
+{
+	if (!name)
+	{
+		replyErr(F("missing name"));
+		return;
+	}
+	float v;
+	if (ConfigStore::get(name, v))
+	{
+		Serial.print(F("CFG "));
+		Serial.print(name);
+		Serial.print(F("="));
+		Serial.println(v, 4);
+		return;
+	}
+	replyErr(F("no such param"));
+}
+
+static void cmdCfgSet(char *name, char *valTok)
+{
+	if (!name || !valTok)
+	{
+		replyErr(F("usage SET <name> <val>"));
+		return;
+	}
+	// Confirm parameter exists first
+	float cur;
+	if (!ConfigStore::get(name, cur))
+	{
+		replyErr(F("no such param"));
+		return;
+	}
+	char *endp = nullptr;
+	double nv = strtod(valTok, &endp);
+	if (endp == valTok || (*endp != 0))
+	{
+		replyErr(F("bad number"));
+		return;
+	}
+	if (ConfigStore::set(name, (float)nv))
+	{
+		Serial.print(F("OK "));
+		Serial.print(name);
+		Serial.print(F("="));
+		Serial.println((float)nv, 4);
+	}
+	else
+	{
+		replyErr(F("set failed"));
+	}
+}
+
+static void cmdCfgReset()
+{
+	ConfigStore::resetDefaults();
+	replyOk();
+}
+
+static void cmdCfgSave()
+{
+	if (ConfigStore::save())
+		replyOk();
+	else
+		replyErr(F("save failed"));
+}
+
+static void processLine(char *line)
+{
+	char *cursor = line;
+	char *tok = nextToken(cursor);
+	if (!tok)
+		return;
+	if (icmp(tok, "HELP") == 0)
+	{
+		cmdHelp();
+		return;
+	}
+	if (icmp(tok, "CFG") == 0)
+	{
+		char *sub = nextToken(cursor);
+		if (!sub)
+		{
+			replyErr(F("CFG missing sub"));
+			return;
+		}
+		if (icmp(sub, "LIST") == 0)
+		{
+			cmdCfgList();
+			return;
+		}
+		if (icmp(sub, "GET") == 0)
+		{
+			if (icmp(sub, "MOTORS") == 0)
+			{
+				Serial.print(F("MOTORS cmdL="));
+				Serial.print(g_lastCmdL);
+				Serial.print(F(" cmdR="));
+				Serial.print(g_lastCmdR);
+				Serial.print(F(" usL="));
+				Serial.print(g_lastUsL);
+				Serial.print(F(" usR="));
+				Serial.print(g_lastUsR);
+				Serial.println();
+				return;
+			}
+			if (icmp(sub, "HEADING") == 0)
+			{
+				Serial.print(F("HEADING bno="));
+				Serial.print(g_bnoOk ? 1 : 0);
+				float curH;
+				if (g_bnoOk && readHeadingDeg(curH))
+				{
+					Serial.print(F(" cur="));
+					Serial.print(curH, 2);
+					Serial.print(F(" hold="));
+					Serial.print(g_headingHoldActive ? 1 : 0);
+					if (g_headingHoldActive)
+					{
+						float err = shortestDiffDeg(g_headingTargetDeg, curH);
+						Serial.print(F(" tgt="));
+						Serial.print(g_headingTargetDeg, 2);
+						Serial.print(F(" err="));
+						Serial.print(err, 2);
+					}
+				}
+				Serial.println();
+				return;
+			}
+			if (icmp(sub, "ALL") == 0)
+			{
+				// Combine STATUS + RC + MOTORS + HEADING in a single line for easy logging
+				RcInputs rc = readRc();
+				Serial.print(F("ALL mode="));
+				switch (g_mode)
+				{
+				case MODE_DISARMED:
+					Serial.print(F("DIS"));
+					break;
+				case MODE_NORMAL:
+					Serial.print(F("NRM"));
+					break;
+				case MODE_AIR:
+					Serial.print(F("AIR"));
+					break;
+				default:
+					Serial.print(F("?"));
+					break;
+				}
+				Serial.print(F(" armed="));
+				Serial.print(g_armed ? 1 : 0);
+				Serial.print(F(" hold="));
+				Serial.print(g_headingHoldActive ? 1 : 0);
+				Serial.print(F(" bno="));
+				Serial.print(g_bnoOk ? 1 : 0);
+				Serial.print(F(" fsHold="));
+				Serial.print(g_holdFailsafe ? 1 : 0);
+				Serial.print(F(" yawUs="));
+				Serial.print(rc.usYaw);
+				Serial.print(F(" thrUs="));
+				Serial.print(rc.usThr);
+				Serial.print(F(" nUs="));
+				Serial.print(rc.usBtnNorm);
+				Serial.print(F(" aUs="));
+				Serial.print(rc.usBtnAir);
+				Serial.print(F(" hUs="));
+				Serial.print(rc.usBtnHold);
+				Serial.print(F(" yaw="));
+				Serial.print(rc.yaw);
+				Serial.print(F(" thr="));
+				Serial.print(rc.thr);
+				Serial.print(F(" cmdL="));
+				Serial.print(g_lastCmdL);
+				Serial.print(F(" cmdR="));
+				Serial.print(g_lastCmdR);
+				Serial.print(F(" usL="));
+				Serial.print(g_lastUsL);
+				Serial.print(F(" usR="));
+				Serial.print(g_lastUsR);
+				float curH;
+				if (g_bnoOk && readHeadingDeg(curH))
+				{
+					Serial.print(F(" curH="));
+					Serial.print(curH, 1);
+					if (g_headingHoldActive)
+					{
+						float err = shortestDiffDeg(g_headingTargetDeg, curH);
+						Serial.print(F(" tgtH="));
+						Serial.print(g_headingTargetDeg, 1);
+						Serial.print(F(" errH="));
+						Serial.print(err, 1);
+					}
+				}
+				Serial.println();
+				return;
+			}
+			char *pname = nextToken(cursor);
+			cmdCfgGet(pname);
+			return;
+		}
+		if (icmp(sub, "SET") == 0)
+		{
+			char *pname = nextToken(cursor);
+			char *pval = nextToken(cursor);
+			cmdCfgSet(pname, pval);
+			return;
+		}
+		if (icmp(sub, "RESET") == 0)
+		{
+			cmdCfgReset();
+			return;
+		}
+		if (icmp(sub, "SAVE") == 0)
+		{
+			cmdCfgSave();
+			return;
+		}
+		replyErr(F("bad CFG sub"));
+		return;
+	}
+	if (icmp(tok, "TELEM") == 0)
+	{
+		char *sub = nextToken(cursor);
+		if (!sub)
+		{
+			replyErr(F("TELEM missing sub"));
+			return;
+		}
+		if (icmp(sub, "STATUS") == 0)
+		{
+			// Emit one line with key=value pairs
+			Serial.print(F("STATUS mode="));
+			switch (g_mode)
+			{
+			case MODE_DISARMED:
+				Serial.print(F("DIS"));
+				break;
+			case MODE_NORMAL:
+				Serial.print(F("NRM"));
+				break;
+			case MODE_AIR:
+				Serial.print(F("AIR"));
+				break;
+			default:
+				Serial.print(F("?"));
+				break;
+			}
+			Serial.print(F(" armed="));
+			Serial.print(g_armed ? 1 : 0);
+			Serial.print(F(" hold="));
+			Serial.print(g_headingHoldActive ? 1 : 0);
+			Serial.print(F(" bno="));
+			Serial.print(g_bnoOk ? 1 : 0);
+			Serial.print(F(" fsHold="));
+			Serial.print(g_holdFailsafe ? 1 : 0);
+			Serial.print(F(" cmdL="));
+			Serial.print(g_lastCmdL);
+			Serial.print(F(" cmdR="));
+			Serial.print(g_lastCmdR);
+			Serial.print(F(" usL="));
+			Serial.print(g_lastUsL);
+			Serial.print(F(" usR="));
+			Serial.print(g_lastUsR);
+			Serial.println();
+			return;
+		}
+		if (icmp(sub, "RC") == 0)
+		{
+			// Snapshot RC values (raw pulses + mapped)
+			RcInputs rc = readRc();
+			Serial.print(F("RC yawUs="));
+			Serial.print(rc.usYaw);
+			Serial.print(F(" thrUs="));
+			Serial.print(rc.usThr);
+			Serial.print(F(" nUs="));
+			Serial.print(rc.usBtnNorm);
+			Serial.print(F(" aUs="));
+			Serial.print(rc.usBtnAir);
+			Serial.print(F(" hUs="));
+			Serial.print(rc.usBtnHold);
+			Serial.print(F(" yaw="));
+			Serial.print(rc.yaw);
+			Serial.print(F(" thr="));
+			Serial.print(rc.thr);
+			Serial.print(F(" valid="));
+			Serial.print(rc.valid ? 1 : 0);
+			Serial.println();
+			return;
+		}
+		if (icmp(sub, "MOTORS") == 0)
+		{
+			Serial.print(F("MOTORS cmdL="));
+			Serial.print(g_lastCmdL);
+			Serial.print(F(" cmdR="));
+			Serial.print(g_lastCmdR);
+			Serial.print(F(" usL="));
+			Serial.print(g_lastUsL);
+			Serial.print(F(" usR="));
+			Serial.print(g_lastUsR);
+			Serial.println();
+			return;
+		}
+		if (icmp(sub, "HEADING") == 0)
+		{
+			Serial.print(F("HEADING bno="));
+			Serial.print(g_bnoOk ? 1 : 0);
+			float curH;
+			if (g_bnoOk && readHeadingDeg(curH))
+			{
+				Serial.print(F(" cur="));
+				Serial.print(curH, 2);
+				Serial.print(F(" hold="));
+				Serial.print(g_headingHoldActive ? 1 : 0);
+				if (g_headingHoldActive)
+				{
+					float err = shortestDiffDeg(g_headingTargetDeg, curH);
+					Serial.print(F(" tgt="));
+					Serial.print(g_headingTargetDeg, 2);
+					Serial.print(F(" err="));
+					Serial.print(err, 2);
+				}
+			}
+			Serial.println();
+			return;
+		}
+		if (icmp(sub, "ALL") == 0)
+		{
+			RcInputs rc = readRc();
+			Serial.print(F("ALL mode="));
+			switch (g_mode)
+			{
+			case MODE_DISARMED:
+				Serial.print(F("DIS"));
+				break;
+			case MODE_NORMAL:
+				Serial.print(F("NRM"));
+				break;
+			case MODE_AIR:
+				Serial.print(F("AIR"));
+				break;
+			default:
+				Serial.print(F("?"));
+				break;
+			}
+			Serial.print(F(" armed="));
+			Serial.print(g_armed ? 1 : 0);
+			Serial.print(F(" hold="));
+			Serial.print(g_headingHoldActive ? 1 : 0);
+			Serial.print(F(" bno="));
+			Serial.print(g_bnoOk ? 1 : 0);
+			Serial.print(F(" fsHold="));
+			Serial.print(g_holdFailsafe ? 1 : 0);
+			Serial.print(F(" yawUs="));
+			Serial.print(rc.usYaw);
+			Serial.print(F(" thrUs="));
+			Serial.print(rc.usThr);
+			Serial.print(F(" nUs="));
+			Serial.print(rc.usBtnNorm);
+			Serial.print(F(" aUs="));
+			Serial.print(rc.usBtnAir);
+			Serial.print(F(" hUs="));
+			Serial.print(rc.usBtnHold);
+			Serial.print(F(" yaw="));
+			Serial.print(rc.yaw);
+			Serial.print(F(" thr="));
+			Serial.print(rc.thr);
+			Serial.print(F(" cmdL="));
+			Serial.print(g_lastCmdL);
+			Serial.print(F(" cmdR="));
+			Serial.print(g_lastCmdR);
+			Serial.print(F(" usL="));
+			Serial.print(g_lastUsL);
+			Serial.print(F(" usR="));
+			Serial.print(g_lastUsR);
+			float curH;
+			if (g_bnoOk && readHeadingDeg(curH))
+			{
+				Serial.print(F(" curH="));
+				Serial.print(curH, 1);
+				if (g_headingHoldActive)
+				{
+					float err = shortestDiffDeg(g_headingTargetDeg, curH);
+					Serial.print(F(" tgtH="));
+					Serial.print(g_headingTargetDeg, 1);
+					Serial.print(F(" errH="));
+					Serial.print(err, 1);
+				}
+			}
+			Serial.println();
+			return;
+		}
+		replyErr(F("bad TELEM sub"));
+		return;
+	}
+	if (icmp(tok, "HEAD") == 0)
+	{
+		char *sub = nextToken(cursor);
+		if (!sub)
+		{
+			replyErr(F("HEAD missing sub"));
+			return;
+		}
+		if (icmp(sub, "ON") == 0)
+		{
+			if (!ConfigStore::headingHoldEnabled())
+			{
+				replyErr(F("feature disabled"));
+				return;
+			}
+			float h;
+			if (g_bnoOk && readHeadingDeg(h))
+			{
+				g_headingTargetDeg = h;
+				g_headingHoldActive = true;
+				g_headErrInt = 0.0f;
+				g_headPrevErr = 0.0f;
+				g_headLastMs = millis();
+				Serial.print(F("HEAD ON target="));
+				Serial.println(g_headingTargetDeg, 2);
+			}
+			else
+			{
+				replyErr(F("no heading"));
+			}
+			return;
+		}
+		if (icmp(sub, "OFF") == 0)
+		{
+			g_headingHoldActive = false;
+			replyOk();
+			return;
+		}
+		if (icmp(sub, "SET") == 0)
+		{
+			char *val = nextToken(cursor);
+			if (!val)
+			{
+				replyErr(F("need deg"));
+				return;
+			}
+			char *endp = nullptr;
+			double deg = strtod(val, &endp);
+			if (endp == val || (*endp != 0))
+			{
+				replyErr(F("bad number"));
+				return;
+			}
+			while (deg >= 360.0)
+				deg -= 360.0;
+			while (deg < 0.0)
+				deg += 360.0;
+			g_headingTargetDeg = (float)deg;
+			g_headErrInt = 0.0f; // reset integrator when externally changed
+			Serial.print(F("HEAD TARGET="));
+			Serial.println(g_headingTargetDeg, 2);
+			return;
+		}
+		if (icmp(sub, "TARGET") == 0)
+		{
+			Serial.print(F("HEAD TARGET="));
+			Serial.println(g_headingTargetDeg, 2);
+			return;
+		}
+		replyErr(F("bad HEAD sub"));
+		return;
+	}
+	replyErr(F("unknown"));
+}
+
+static void handleSerial()
+{
+	while (Serial.available())
+	{
+		int c = Serial.read();
+		if (c == '\r' || c == '\n')
+		{
+			g_lineBuf[g_lineLen] = 0;
+			if (g_lineLen > 0)
+			{
+				processLine(g_lineBuf);
+			}
+			Serial.print(F("> "));
+			g_lineLen = 0;
+			continue;
+		}
+		if (c < 32 || c > 126)
+			continue; // skip non-printable
+		if (g_lineLen < (sizeof(g_lineBuf) - 1))
+		{
+			g_lineBuf[g_lineLen++] = (char)c;
+		}
+	}
+}
+
 void setup()
 {
 	Serial.begin(115200);
 	delay(100);
 	Serial.println(F("KC1 - Kayak Controller (Uno)"));
+	Serial.print(F("> "));
 	// Initialize persistent configuration (loads or creates defaults)
 	ConfigStore::begin();
 #if DEBUG_ENABLED && (DEBUG_STYLE == 0)
@@ -824,6 +1400,10 @@ static void disarm()
 	g_airThrSet = 0;
 	writeEscOutputsUs(1500, 1500);
 	g_headingHoldActive = false;
+	g_lastCmdL = 0;
+	g_lastCmdR = 0;
+	g_lastUsL = 1500;
+	g_lastUsR = 1500;
 }
 
 static void maybeArmOrSwitchMode(const RcInputs &rc)
@@ -954,6 +1534,9 @@ void loop()
 	static uint32_t lastDebugMs = 0;
 	static uint8_t invalidCount = 0; // debounce invalid RC
 
+	// Poll serial for incoming command characters
+	handleSerial();
+
 	uint32_t nowMs = millis();
 	if (nowMs < nextTickMs)
 	{
@@ -993,6 +1576,10 @@ void loop()
 		writeEscOutputsUs(1500, 1500);
 		cmdL = 0; // reflect neutral in debug
 		cmdR = 0;
+		g_lastCmdL = cmdL;
+		g_lastCmdR = cmdR;
+		g_lastUsL = 1500;
+		g_lastUsR = 1500;
 	}
 	else
 	{
@@ -1002,6 +1589,10 @@ void loop()
 			writeEscOutputsUs(1500, 1500);
 			cmdL = 0;
 			cmdR = 0;
+			g_lastCmdL = cmdL;
+			g_lastCmdR = cmdR;
+			g_lastUsL = 1500;
+			g_lastUsR = 1500;
 		}
 		else
 		{
@@ -1049,6 +1640,10 @@ void loop()
 			uint16_t usL = mapSigned1000ToUs(cmdL);
 			uint16_t usR = mapSigned1000ToUs(cmdR);
 			writeEscOutputsUs(usL, usR);
+			g_lastCmdL = cmdL;
+			g_lastCmdR = cmdR;
+			g_lastUsL = usL;
+			g_lastUsR = usR;
 		}
 	}
 
