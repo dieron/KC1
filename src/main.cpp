@@ -843,6 +843,7 @@ static void cmdHelp()
 	Serial.println(F("  HEAD OFF - disable heading hold"));
 	Serial.println(F("  HEAD SET <deg> - set target to value"));
 	Serial.println(F("  HEAD TARGET - report current target"));
+	Serial.println(F("  RESET - disarm and neutral outputs"));
 }
 
 static void cmdCfgList()
@@ -1314,6 +1315,12 @@ static void processLine(char *line)
 			return;
 		}
 		replyErr(F("bad HEAD sub"));
+		return;
+	}
+	if (icmp(tok, "RESET") == 0)
+	{
+		disarm();
+		replyOk();
 		return;
 	}
 	replyErr(F("unknown"));
