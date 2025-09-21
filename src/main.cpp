@@ -14,6 +14,8 @@
 #include <utility/imumaths.h>
 #include "ConfigStore.h"
 
+// (SoftwareSerial removed due to ISR vector conflicts with PCINT-based RC capture)
+
 // ========= Debug configuration =========
 // Set DEBUG_ENABLED to 0 to disable all Serial prints at compile time
 #ifndef DEBUG_ENABLED
@@ -288,6 +290,8 @@ static int16_t g_lastCmdR = 0;
 static uint16_t g_lastUsL = 1500;
 static uint16_t g_lastUsR = 1500;
 
+// disarm moved early to avoid any forward-decl issues
+
 static float normalizeAngleDeg(float a)
 {
 	while (a >= 360.0f)
@@ -410,12 +414,17 @@ static void applyHeadingHoldIfNeeded(int16_t &cmdL, int16_t &cmdR)
 	}
 
 	float yawCmdF = headingPidStep(err, dt);
+	// Invert sign: BNO055 positive heading error (target ahead CCW) should
+	// produce a CCW turn. Differential mix uses positive yaw to mean clockwise
+	// (left++ right--). Negate here so positive error yields negative yawCmd,
+	// selecting the CCW branches below.
+	yawCmdF = -yawCmdF;
 	int16_t yawCmd = (int16_t)yawCmdF;
 	// Avoid tiny bias from noise
-	if (yawCmd > -20 && yawCmd < 20)
+	if (abs((int)yawCmd) < 20)
 		yawCmd = 0;
 
-	if (avgMag <= cfgSpeedZeroThresh())
+	if (avgMag <= (int16_t)cfgSpeedZeroThresh())
 	{
 		int16_t spinMag = abs(yawCmd);
 		if (spinMag < cfgSpinCmdMin())
@@ -918,6 +927,20 @@ static void cmdCfgSave()
 		replyErr(F("save failed"));
 }
 
+static void disarm()
+{
+	g_armed = false;
+	g_mode = MODE_DISARMED;
+	g_airYawSet = 0;
+	g_airThrSet = 0;
+	writeEscOutputsUs(1500, 1500);
+	g_headingHoldActive = false;
+	g_lastCmdL = 0;
+	g_lastCmdR = 0;
+	g_lastUsL = 1500;
+	g_lastUsR = 1500;
+}
+
 static void processLine(char *line)
 {
 	char *cursor = line;
@@ -1319,6 +1342,7 @@ static void processLine(char *line)
 	}
 	if (icmp(tok, "RESET") == 0)
 	{
+		// Forward declaration for disarm added above if necessary
 		disarm();
 		replyOk();
 		return;
@@ -1326,6 +1350,7 @@ static void processLine(char *line)
 	replyErr(F("unknown"));
 }
 
+// Handle command input from USB Serial only
 static void handleSerial()
 {
 	while (Serial.available())
@@ -1353,7 +1378,9 @@ static void handleSerial()
 
 void setup()
 {
-	Serial.begin(115200);
+	// Serial.begin(115200);
+	// Serial.begin(57600);
+	Serial.begin(9600);
 	delay(100);
 	Serial.println(F("KC1 - Kayak Controller (Uno)"));
 	Serial.print(F("> "));
@@ -1397,20 +1424,6 @@ void setup()
 		Serial.println(F("BNO055 NOT FOUND"));
 #endif
 	}
-}
-
-static void disarm()
-{
-	g_armed = false;
-	g_mode = MODE_DISARMED;
-	g_airYawSet = 0;
-	g_airThrSet = 0;
-	writeEscOutputsUs(1500, 1500);
-	g_headingHoldActive = false;
-	g_lastCmdL = 0;
-	g_lastCmdR = 0;
-	g_lastUsL = 1500;
-	g_lastUsR = 1500;
 }
 
 static void maybeArmOrSwitchMode(const RcInputs &rc)
