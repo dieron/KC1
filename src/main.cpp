@@ -417,11 +417,9 @@ static void applyHeadingHoldIfNeeded(int16_t &cmdL, int16_t &cmdR)
 	}
 
 	float yawCmdF = headingPidStep(err, dt);
-	// Invert sign: BNO055 positive heading error (target ahead CCW) should
-	// produce a CCW turn. Differential mix uses positive yaw to mean clockwise
-	// (left++ right--). Negate here so positive error yields negative yawCmd,
-	// selecting the CCW branches below.
-	yawCmdF = -yawCmdF;
+	// Previously inverted (yawCmdF = -yawCmdF;) but behavior was opposite in field.
+	// Use direct PID output now. Add configurable inversion later if needed.
+	//	yawCmdF = -yawCmdF;
 	int16_t yawCmd = (int16_t)yawCmdF;
 	// Avoid tiny bias from noise
 	if (abs((int)yawCmd) < 20)
@@ -785,10 +783,6 @@ static void printDebugPseudo(const RcInputs &rc, Mode mode, bool armed, int16_t 
 		{
 			Serial.print(F("?"));
 		}
-	}
-	else
-	{
-		Serial.print(F("N/A"));
 	}
 	// Keep the line short to minimize wrapping; no large fixed padding
 }
