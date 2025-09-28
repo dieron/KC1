@@ -74,6 +74,9 @@
 #ifndef AIR_GAIN_PER_CYCLE
 #define AIR_GAIN_PER_CYCLE 40
 #endif
+#ifndef HDG_GAIN_PER_CYCLE
+#define HDG_GAIN_PER_CYCLE 15
+#endif
 
 // Static storage
 ConfigStore::ConfigData ConfigStore::_data = {};
@@ -97,7 +100,8 @@ const ConfigStore::ConfigData ConfigStore::_defaults = {
 	(uint16_t)STUCK_CYCLES,
 	(int16_t)DEAD_CENTER,
 	(uint16_t)STALE_TIMEOUT_MS,
-	(int16_t)AIR_GAIN_PER_CYCLE};
+	(int16_t)AIR_GAIN_PER_CYCLE,
+	(int16_t)HDG_GAIN_PER_CYCLE};
 bool ConfigStore::_dirty = false;
 
 // PROGMEM names
@@ -121,6 +125,7 @@ static const char n_stuckCycles[] PROGMEM = "stuck_cycles";
 static const char n_deadCenter[] PROGMEM = "dead_center";
 static const char n_staleTimeoutMs[] PROGMEM = "stale_timeout_ms";
 static const char n_airGainPerCycle[] PROGMEM = "air_gain_per_cycle";
+static const char n_hdgGainPerCycle[] PROGMEM = "hdg_gain_per_cycle";
 
 ConfigStore::ConfigStore::Entry *ConfigStore::table()
 {
@@ -145,13 +150,14 @@ ConfigStore::ConfigStore::Entry *ConfigStore::table()
 		{(const __FlashStringHelper *)n_deadCenter, PT_I16, &_data.deadCenter, &_defaults.deadCenter},
 		{(const __FlashStringHelper *)n_staleTimeoutMs, PT_U16, &_data.staleTimeoutMs, &_defaults.staleTimeoutMs},
 		{(const __FlashStringHelper *)n_airGainPerCycle, PT_I16, &_data.airGainPerCycle, &_defaults.airGainPerCycle},
+		{(const __FlashStringHelper *)n_hdgGainPerCycle, PT_I16, &_data.hdgGainPerCycle, &_defaults.hdgGainPerCycle},
 	};
 	return entries;
 }
 
 size_t ConfigStore::tableSize()
 {
-	return 20; // keep in sync with entries above
+	return 21; // keep in sync with entries above
 }
 
 void ConfigStore::loadDefaultsIntoData()

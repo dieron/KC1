@@ -63,6 +63,8 @@ public:
 	static uint16_t staleTimeoutMs() { return _data.staleTimeoutMs; }
 	// Air mode incremental setpoint gain per loop at full stick deflection (command units per 20 ms).
 	static int16_t airGainPerCycle() { return _data.airGainPerCycle; }
+	// Heading mode incremental speed gain per loop at full stick deflection (command units per 20 ms).
+	static int16_t hdgGainPerCycle() { return _data.hdgGainPerCycle; }
 
 private:
 	struct ConfigData
@@ -87,6 +89,7 @@ private:
 		int16_t deadCenter;			// stick deadband (+/- command units)
 		uint16_t staleTimeoutMs;	// ms since last edge before channel invalid
 		int16_t airGainPerCycle;	// Air mode setpoint increment at full stick per loop
+		int16_t hdgGainPerCycle;	// Heading mode forward speed increment at full stick per loop
 	};
 
 	enum ParamType : uint8_t

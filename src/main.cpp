@@ -249,7 +249,8 @@ enum Mode : uint8_t
 {
 	MODE_DISARMED = 0,
 	MODE_NORMAL = 1,
-	MODE_AIR = 2
+	MODE_AIR = 2,
+	MODE_HEADING = 3
 };
 
 struct RcInputs
@@ -274,6 +275,8 @@ static int16_t g_airYawSet = 0;			 // -1000..1000 (latched)
 static int16_t g_airThrSet = 0;			 // -1000..1000 (latched)
 static bool g_skipAirUpdateOnce = false; // when true, skip one Air update to enforce neutral immediately
 static bool g_holdFailsafe = false;		 // constant-signal heuristic: hold motors neutral without disarming
+// Heading mode specific state
+static int16_t g_headingModeSpeed = 0; // 0..1000 forward-only speed command while in MODE_HEADING
 
 // Heading-hold state (always compiled)
 // BNO055 and heading-hold state
@@ -688,7 +691,16 @@ static void printDebugPseudo(const RcInputs &rc, Mode mode, bool armed, int16_t 
 			for (uint8_t i = 0; i < bars; ++i)
 				Serial.print('<');
 		}
-		else if (v > 0)
+		if (mode == MODE_DISARMED)
+			Serial.print(F("DIS"));
+		else if (mode == MODE_NORMAL)
+			Serial.print(F("NRM"));
+		else if (mode == MODE_AIR)
+			Serial.print(F("AIR"));
+		else if (mode == MODE_HEADING)
+			Serial.print(F("HDG"));
+		else
+			Serial.print(F("?"));
 		{
 			for (uint8_t i = 0; i < bars; ++i)
 				Serial.print('>');
@@ -935,6 +947,7 @@ static void disarm()
 	g_airThrSet = 0;
 	writeEscOutputsUs(1500, 1500);
 	g_headingHoldActive = false;
+	g_headingModeSpeed = 0;
 	g_lastCmdL = 0;
 	g_lastCmdR = 0;
 	g_lastUsL = 1500;
@@ -1019,14 +1032,15 @@ static void processLine(char *line)
 				case MODE_AIR:
 					Serial.print(F("AIR"));
 					break;
+				case MODE_HEADING:
+					Serial.print(F("HDG"));
+					break;
 				default:
 					Serial.print(F("?"));
 					break;
 				}
 				Serial.print(F(" armed="));
 				Serial.print(g_armed ? 1 : 0);
-				Serial.print(F(" hold="));
-				Serial.print(g_headingHoldActive ? 1 : 0);
 				Serial.print(F(" bno="));
 				Serial.print(g_bnoOk ? 1 : 0);
 				Serial.print(F(" fsHold="));
@@ -1117,14 +1131,15 @@ static void processLine(char *line)
 			case MODE_AIR:
 				Serial.print(F("AIR"));
 				break;
+			case MODE_HEADING:
+				Serial.print(F("HDG"));
+				break;
 			default:
 				Serial.print(F("?"));
 				break;
 			}
 			Serial.print(F(" armed="));
 			Serial.print(g_armed ? 1 : 0);
-			Serial.print(F(" hold="));
-			Serial.print(g_headingHoldActive ? 1 : 0);
 			Serial.print(F(" bno="));
 			Serial.print(g_bnoOk ? 1 : 0);
 			Serial.print(F(" fsHold="));
@@ -1214,6 +1229,9 @@ static void processLine(char *line)
 			case MODE_AIR:
 				Serial.print(F("AIR"));
 				break;
+			case MODE_HEADING:
+				Serial.print(F("HDG"));
+				break;
 			default:
 				Serial.print(F("?"));
 				break;
@@ -1283,6 +1301,31 @@ static void processLine(char *line)
 				replyErr(F("feature disabled"));
 				return;
 			}
+			if (!g_armed)
+			{
+				replyErr(F("not armed"));
+				return;
+			}
+			// Capture existing forward speed when entering heading mode.
+			// If coming from AIR, use its latched forward setpoint (positive portion only).
+			// If from NORMAL, approximate from last motor commands.
+			if (g_mode != MODE_HEADING)
+			{
+				int16_t baseSpeed = 0;
+				if (g_mode == MODE_AIR)
+				{
+					baseSpeed = g_airThrSet; // already -1000..1000
+				}
+				else if (g_mode == MODE_NORMAL)
+				{
+					baseSpeed = (int16_t)((g_lastCmdL + g_lastCmdR) / 2);
+				}
+				if (baseSpeed < 0)
+					baseSpeed = 0;
+				if (baseSpeed > 1000)
+					baseSpeed = 1000;
+				g_headingModeSpeed = baseSpeed;
+			}
 			float h;
 			if (g_bnoOk && readHeadingDeg(h))
 			{
@@ -1291,7 +1334,8 @@ static void processLine(char *line)
 				g_headErrInt = 0.0f;
 				g_headPrevErr = 0.0f;
 				g_headLastMs = millis();
-				Serial.print(F("HEAD ON target="));
+				g_mode = MODE_HEADING;
+				Serial.print(F("HEAD MODE ON tgt="));
 				Serial.println(g_headingTargetDeg, 2);
 			}
 			else
@@ -1302,8 +1346,17 @@ static void processLine(char *line)
 		}
 		if (icmp(sub, "OFF") == 0)
 		{
-			g_headingHoldActive = false;
-			replyOk();
+			if (g_mode == MODE_HEADING)
+			{
+				g_headingHoldActive = false;
+				g_mode = MODE_NORMAL;	// default return
+				g_headingModeSpeed = 0; // zero speed when leaving via command
+				replyOk();
+			}
+			else
+			{
+				replyErr(F("not in heading"));
+			}
 			return;
 		}
 		if (icmp(sub, "SET") == 0)
@@ -1490,6 +1543,11 @@ static void maybeArmOrSwitchMode(const RcInputs &rc)
 		}
 		else
 		{
+			if (g_mode == MODE_HEADING)
+			{
+				g_headingHoldActive = false;
+				g_headingModeSpeed = 0;
+			}
 			g_mode = MODE_AIR;
 			// Initialize setpoints from current commands to avoid jump
 			g_airYawSet = rc.yaw;
@@ -1505,6 +1563,11 @@ static void maybeArmOrSwitchMode(const RcInputs &rc)
 	{
 		if (g_mode != MODE_NORMAL)
 		{
+			if (g_mode == MODE_HEADING)
+			{
+				g_headingHoldActive = false;
+				g_headingModeSpeed = 0;
+			}
 			g_mode = MODE_NORMAL;
 #if DEBUG_ENABLED && (DEBUG_STYLE == 0)
 			Serial.println(F("MODE -> NORMAL"));
@@ -1515,8 +1578,9 @@ static void maybeArmOrSwitchMode(const RcInputs &rc)
 
 	if (holdToggled)
 	{
-		g_headingHoldActive = !g_headingHoldActive;
-		if (g_headingHoldActive)
+		if (!ConfigStore::headingHoldEnabled())
+			return; // feature disabled
+		if (g_mode != MODE_HEADING && g_armed)
 		{
 			float h;
 			if (readHeadingDeg(h))
@@ -1525,24 +1589,30 @@ static void maybeArmOrSwitchMode(const RcInputs &rc)
 				g_headErrInt = 0.0f;
 				g_headPrevErr = 0.0f;
 				g_headLastMs = millis();
+				// Capture existing forward speed when entering heading mode from RC toggle
+				int16_t baseSpeed = 0;
+				if (g_mode == MODE_AIR)
+					baseSpeed = g_airThrSet;
+				else if (g_mode == MODE_NORMAL)
+					baseSpeed = (int16_t)((g_lastCmdL + g_lastCmdR) / 2);
+				if (baseSpeed < 0)
+					baseSpeed = 0;
+				if (baseSpeed > 1000)
+					baseSpeed = 1000;
+				g_headingModeSpeed = baseSpeed;
+				g_headingHoldActive = true; // active within heading mode
+				g_mode = MODE_HEADING;
 #if DEBUG_ENABLED && (DEBUG_STYLE == 0)
-				Serial.print(F("HDG HOLD ON target="));
+				Serial.print(F("MODE -> HEADING tgt="));
 				Serial.println(g_headingTargetDeg);
 #endif
 			}
 			else
 			{
-				g_headingHoldActive = false;
 #if DEBUG_ENABLED && (DEBUG_STYLE == 0)
-				Serial.println(F("HDG HOLD FAILED (no heading)"));
+				Serial.println(F("HEADING MODE FAILED (no heading)"));
 #endif
 			}
-		}
-		else
-		{
-#if DEBUG_ENABLED && (DEBUG_STYLE == 0)
-			Serial.println(F("HDG HOLD OFF"));
-#endif
 		}
 		return;
 	}
@@ -1638,6 +1708,24 @@ void loop()
 				mixDifferential(g_airThrSet, g_airYawSet, cmdL, cmdR);
 				break;
 			}
+			case MODE_HEADING:
+			{
+				// Incremental forward speed adjustment similar to Air mode but one-dimensional and slower
+				int16_t gain = ConfigStore::hdgGainPerCycle();
+				if (gain < 0)
+					gain = 0;
+				// rc.thr is -1000..1000 after deadband; treat positive as accelerate, negative as decelerate
+				int32_t step = ((int32_t)rc.thr * gain) / 1000; // could be negative
+				int32_t newSpeed = (int32_t)g_headingModeSpeed + step;
+				if (newSpeed < 0)
+					newSpeed = 0;
+				if (newSpeed > 1000)
+					newSpeed = 1000;
+				g_headingModeSpeed = (int16_t)newSpeed;
+				cmdL = g_headingModeSpeed;
+				cmdR = g_headingModeSpeed;
+				break;
+			}
 			default:
 				cmdL = 0;
 				cmdR = 0;
@@ -1647,7 +1735,10 @@ void loop()
 			// Apply heading-hold correction before expo and reversal
 			// Runtime heading hold application
 			if (ConfigStore::headingHoldEnabled())
+			{
+				// In MODE_HEADING we force g_headingHoldActive true; other modes depend on user toggle
 				applyHeadingHoldIfNeeded(cmdL, cmdR);
+			}
 
 			// Apply output shaping: exponential and optional reversal
 			cmdL = applyExpoSigned1000(cmdL, motorExpoL());

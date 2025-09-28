@@ -1,6 +1,6 @@
 # KC1 — Kayak Controller (Arduino Uno)
 
-Differential‑thrust kayak controller with Normal & Air modes, optional heading hold (BNO055), runtime serial configuration/telemetry API, and safety‑first arming & failsafe behaviors.
+Differential‑thrust kayak controller with Normal, Air, and dedicated Heading (compass) modes, runtime serial configuration/telemetry API, and safety‑first arming & failsafe behaviors.
 
 ## Current Hardware / Pin Map
 
@@ -16,24 +16,44 @@ Differential‑thrust kayak controller with Normal & Air modes, optional heading
 
 ## Modes & Control
 
-- DISARMED: Neutral outputs (1500 µs). Transition to armed only when yaw & throttle centered and a CH3/CH4 toggle event (>500 µs jump) occurs.
-- NORMAL: Direct differential mix (L=Thr+Yaw, R=Thr−Yaw).
-- AIR: Latched setpoints increment toward stick deflection each loop (trim‑style “cruise” control). Retoggling Air while already in Air instantly neutralizes (one-cycle skip flag).
-- HEADING HOLD: When enabled (HEAD ON command or CH5 toggle), captures current compass heading, applies PID yaw correction with speed‑aware strategy:
-  - Near zero throttle: spin in place (opposite sign motors within configured min/max)
-  - High speed: subtract from one side only
-  - Mid speeds: differential add/subtract on both sides
-  - Small error inside deadband: integrator decay + base commands restored (no bias)
+| Mode     | How to Enter                                       | How to Exit                                                   | Behavior Summary                                                                                                     |
+| -------- | -------------------------------------------------- | ------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
+| DISARMED | Power‑up, `RESET`, stale RC                        | Arm via CH3 (Normal) or CH4 (Air) toggle with sticks centered | Motors neutral (1500 µs)                                                                                             |
+| NORMAL   | CH3 toggle while disarmed or from other armed mode | Switch to AIR (CH4), HEADING (CH5/HEAD ON) or DISARM          | Direct differential mix (L=Thr+Yaw, R=Thr−Yaw)                                                                       |
+| AIR      | CH4 toggle while disarmed or from other armed mode | Toggle CH4 again (neutralize), go NORMAL/HEADING, or DISARM   | Latched setpoints (`air_gain_per_cycle` per loop at full stick) for cruise-like trimming                             |
+| HEADING  | CH5 toggle or `HEAD ON` (armed + BNO055 OK)        | `HEAD OFF` (to NORMAL) or CH3/CH4 to NORMAL/AIR or DISARM     | Holds captured heading with yaw PID; forward speed is incremental cruise adjusted by throttle (`hdg_gain_per_cycle`) |
+
+Heading mode particulars:
+
+- Entering from AIR preserves forward speed using the latched Air throttle setpoint; from NORMAL it derives from current motor outputs.
+- Throttle stick center ≈ hold; forward increases cruise speed; back decreases (never reverses below zero).
+- Yaw stick is ignored for turning—PID provides yaw corrections.
+- Exiting via `HEAD OFF` resets heading speed to zero (NORMAL mode).
 
 ## Runtime Configuration & Persistence
 
 `ConfigStore` provides named float parameters persisted in EEPROM. Runtime changes via serial API `CFG SET` auto‑save immediately. Factory defaults recoverable with `CFG RESET`.
 
-Key parameters (names exactly as used by API):
+Key parameters:
 
-- Motion / shaping: `reverseLeft`, `reverseRight`, `motorExpoL`, `motorExpoR`
-- Heading: `headKp`, `headKi`, `headKd`, `headCmdMax`, `headingDeadbandDeg`, `speedZeroThresh`, `speedHighFrac`, `spinCmdMin`, `spinCmdMax`, `headingHoldEnabled`
-- Failsafe & input quality: `deadCenter`, `staleTimeoutMs`, `airGainPerCycle`, `failsafeStuckThr`, `stuckDeltaUs`, `stuckCycles`
+Motion / shaping:
+
+- `reverseLeft`, `reverseRight`, `motorExpoL`, `motorExpoR`
+
+Heading & yaw correction:
+
+- `headingHoldEnabled`, `headingDeadbandDeg`
+- `headKp`, `headKi`, `headKd`, `headCmdMax`
+- `speedZeroThresh`, `speedHighFrac`, `spinCmdMin`, `spinCmdMax`
+- `hdg_gain_per_cycle` (Heading mode forward speed increment per loop at full stick)
+
+Cruise / setpoint:
+
+- `air_gain_per_cycle` (Air mode incremental gain)
+
+Failsafe & input quality:
+
+- `deadCenter`, `staleTimeoutMs`, `failsafeStuckThr`, `stuckDeltaUs`, `stuckCycles`
 
 Use `CFG LIST` to view current values (one `name=value` per line).
 
@@ -64,18 +84,18 @@ RESET
 
 Telemetry line formats (examples):
 
-- `STATUS mode=NRM armed=1 hold=0 bno=1 fsHold=0 cmdL=120 cmdR=100 usL=1560 usR=1550`
+- `STATUS mode=HDG armed=1 bno=1 fsHold=0 cmdL=300 cmdR=300 usL=1680 usR=1680`
 - `RC yawUs=1510 thrUs=1500 nUs=1000 aUs=1000 hUs=1000 yaw=20 thr=0 valid=1`
 - `MOTORS cmdL=... cmdR=... usL=... usR=...`
 - `HEADING bno=1 cur=123.45 hold=1 tgt=125.00 err=-1.55`
 - `ALL ...` (STATUS + RC + MOTORS + optional heading details consolidated)
 
-Heading control:
+Heading mode / compass control:
 
-- `HEAD ON` captures current heading if sensor OK; starts correction.
-- `HEAD OFF` disables correction.
-- `HEAD SET 270` sets absolute target (normalized 0–359.99).
-- `HEAD TARGET` prints current target.
+- `HEAD ON` (or CH5) enters heading mode, capturing current heading & initial speed.
+- `HEAD OFF` leaves heading mode (returns to NORMAL, zero speed).
+- `HEAD SET <deg>` sets absolute target heading; resets PID integrator.
+- `HEAD TARGET` prints current heading target.
 
 Reset:
 
@@ -111,12 +131,13 @@ pio run -e uno -t upload  # build + flash
 - Use a 1k series resistor HC‑06 TX → D0 to limit contention with onboard USB interface; Arduino TX → HC‑06 RX through a divider if module RX is not 5V tolerant.
 - Do not open the PC Serial Monitor while also using a Bluetooth terminal (shared UART collisions cause garbled commands).
 
-## Heading Hold Implementation Highlights
+## Heading Mode Implementation Highlights
 
-- Angular difference via shortest signed path (wrap‑aware −180..+180).
-- PID with integral decay inside half the deadband and integrator reset when `HEAD SET` used.
-- Sign inversion applied so positive heading error (target CCW ahead) yields correct physical turn direction according to differential mix conventions.
-- Speed regime logic picks spin / balanced / one‑sided reduction strategy.
+- Shortest wrap‑aware angular difference (−180..+180) for error.
+- PID: integral decay inside half deadband; integrator reset on target change.
+- Sign inversion aligns sensor positive error with correct differential thrust correction.
+- Speed regime logic: stationary spin (bounded by `spinCmdMin/Max`), blended differential, or high‑speed one‑sided reduction.
+- Separate incremental forward cruise gain: `hdg_gain_per_cycle` (distinct from `air_gain_per_cycle`).
 
 ## Future / TODO (abridged)
 
@@ -129,8 +150,9 @@ pio run -e uno -t upload  # build + flash
 1. Wire RC inputs (D4–D7 + optional D8 for heading hold toggle), ESCs (D9/D10), BNO055 (A4/A5), Bluetooth (optional) and common ground.
 2. Flash `[env:uno]`. Open Serial at 9600. Prompt appears: `KC1 - Kayak Controller (Uno)` then `> `.
 3. Send `HELP` to list commands.
-4. Arm: center sticks, toggle CH3 or CH4.
-5. Enable heading hold: `HEAD ON` (with BNO055 present) or CH5 toggle.
+4. Arm: center sticks, toggle CH3 (Normal) or CH4 (Air).
+5. Enter heading mode: `HEAD ON` (BNO055 required) or CH5 toggle.
+6. Adjust heading-mode cruise speed with throttle stick (center hold / forward increase / back decrease).
 
 ## Disclaimer
 
