@@ -353,6 +353,15 @@ static float headingPidStep(float errDeg, float dtSec)
 {
 	// Integrator with light decay to reduce residual bias
 	g_headErrInt += errDeg * dtSec;
+
+	// Simple anti-windup when output is (likely) saturated: if last output magnitude was near limit and
+	// new error is still large and of same sign, damp further integral growth.
+	float cmdMax = cfgHeadCmdMax();
+	float absPrev = fabsf(g_headPrevErr * cfgHeadKp()); // rough proxy before full term
+	if (absPrev > (cmdMax * 0.9f) && (errDeg * g_headPrevErr) > 0.0f)
+	{
+		g_headErrInt *= 0.98f; // small bleed against windup
+	}
 	// When error is within half the deadband, bleed off integral quickly
 	if (fabsf(errDeg) <= (cfgHeadingDeadband() * 0.5f))
 	{
@@ -365,7 +374,7 @@ static float headingPidStep(float errDeg, float dtSec)
 	float Kp = cfgHeadKp();
 	float Ki = cfgHeadKi();
 	float Kd = cfgHeadKd();
-	float cmdMax = cfgHeadCmdMax();
+	cmdMax = cfgHeadCmdMax();
 	float iMax = (Ki > 0.0f) ? (cmdMax / Ki) : 0.0f;
 	if (Ki > 0.0f)
 	{
@@ -424,6 +433,38 @@ static void applyHeadingHoldIfNeeded(int16_t &cmdL, int16_t &cmdR)
 	// Avoid tiny bias from noise
 	if (abs((int)yawCmd) < 20)
 		yawCmd = 0;
+
+	// Adaptive linear boost: scale up gently with larger heading error while respecting kayak's limited turn rate.
+	// Rationale: abrupt fixed boosts can cause overshoot; here we linearly scale from 1.0x at 2*deadband
+	// to a modest maximum (e.g. 1.35x) at a large but realistic error (e.g. 90 deg).
+	{
+		float db = cfgHeadingDeadband();
+		float triggerErr = db * ConfigStore::headBoostTriggerMult(); // configurable start multiplier
+		float e = fabsf(err);
+		if (e > triggerErr && yawCmd != 0)
+		{
+			// Limit boost consideration if we're already near max authority
+			int16_t absYaw = abs(yawCmd);
+			int16_t cmdMax = (int16_t)cfgHeadCmdMax();
+			if (absYaw < (int16_t)(cmdMax * 0.85f))
+			{
+				const float maxErrForBoost = 90.0f;					// beyond this treat as "fully boosted" (kayak practically turning as hard as allowed)
+				const float maxBoost = ConfigStore::headMaxBoost(); // configurable gentle upper multiplier
+				float t = (e - triggerErr) / (maxErrForBoost - triggerErr);
+				if (t > 1.0f)
+					t = 1.0f;
+				else if (t < 0.0f)
+					t = 0.0f;
+				float mult = 1.0f + t * (maxBoost - 1.0f);
+				int32_t boosted = (int32_t)((float)yawCmd * mult);
+				if (boosted > cmdMax)
+					boosted = cmdMax;
+				else if (boosted < -cmdMax)
+					boosted = -cmdMax;
+				yawCmd = (int16_t)boosted;
+			}
+		}
+	}
 
 	if (avgMag <= (int16_t)cfgSpeedZeroThresh())
 	{
@@ -1429,7 +1470,7 @@ void setup()
 	// Serial.begin(57600);
 	Serial.begin(9600);
 	delay(100);
-	Serial.println(F("KC1 - Kayak Controller (Uno)"));
+	Serial.println(F("KC1 - Kayak Controller (Uno) API v0.2.0"));
 	Serial.print(F("> "));
 	// Initialize persistent configuration (loads or creates defaults)
 	ConfigStore::begin();

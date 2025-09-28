@@ -65,6 +65,10 @@ public:
 	static int16_t airGainPerCycle() { return _data.airGainPerCycle; }
 	// Heading mode incremental speed gain per loop at full stick deflection (command units per 20 ms).
 	static int16_t hdgGainPerCycle() { return _data.hdgGainPerCycle; }
+	// Adaptive heading boost: multiplier applied to heading deadband to start linear boost ramp (e.g. 2.0 => start at 2x deadband)
+	static float headBoostTriggerMult() { return _data.headBoostTriggerMult; }
+	// Adaptive heading boost maximum multiplier (1.0 = no boost, 1.35 = +35% authority at large errors)
+	static float headMaxBoost() { return _data.headMaxBoost; }
 
 private:
 	struct ConfigData
@@ -90,6 +94,8 @@ private:
 		uint16_t staleTimeoutMs;	// ms since last edge before channel invalid
 		int16_t airGainPerCycle;	// Air mode setpoint increment at full stick per loop
 		int16_t hdgGainPerCycle;	// Heading mode forward speed increment at full stick per loop
+		float headBoostTriggerMult; // Multiplier of deadband where boost begins (e.g. 2.0)
+		float headMaxBoost;			// Maximum adaptive boost multiplier (>=1.0)
 	};
 
 	enum ParamType : uint8_t

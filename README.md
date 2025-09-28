@@ -1,5 +1,7 @@
 # KC1 — Kayak Controller (Arduino Uno)
 
+API Version: **0.2.0**
+
 Differential‑thrust kayak controller with Normal, Air, and dedicated Heading (compass) modes, runtime serial configuration/telemetry API, and safety‑first arming & failsafe behaviors.
 
 ## Current Hardware / Pin Map
@@ -46,6 +48,8 @@ Heading & yaw correction:
 - `headKp`, `headKi`, `headKd`, `headCmdMax`
 - `speedZeroThresh`, `speedHighFrac`, `spinCmdMin`, `spinCmdMax`
 - `hdg_gain_per_cycle` (Heading mode forward speed increment per loop at full stick)
+- `head_boost_trigger_mult` (Multiplier of deadband where adaptive yaw boost begins; default 2.0)
+- `head_max_boost` (Maximum adaptive yaw boost multiplier; default 1.35)
 
 Cruise / setpoint:
 
@@ -134,8 +138,8 @@ pio run -e uno -t upload  # build + flash
 ## Heading Mode Implementation Highlights
 
 - Shortest wrap‑aware angular difference (−180..+180) for error.
-- PID: integral decay inside half deadband; integrator reset on target change.
-- Sign inversion aligns sensor positive error with correct differential thrust correction.
+- PID: integral decay inside half deadband; integrator reset on target change; mild anti‑windup near saturation.
+- Adaptive linear yaw authority boost: begins at `headingDeadbandDeg * head_boost_trigger_mult`, ramps to `head_max_boost` by ~90° error (unless already near max authority) so large deviations correct faster without overshoot.
 - Speed regime logic: stationary spin (bounded by `spinCmdMin/Max`), blended differential, or high‑speed one‑sided reduction.
 - Separate incremental forward cruise gain: `hdg_gain_per_cycle` (distinct from `air_gain_per_cycle`).
 

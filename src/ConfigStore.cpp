@@ -77,6 +77,12 @@
 #ifndef HDG_GAIN_PER_CYCLE
 #define HDG_GAIN_PER_CYCLE 15
 #endif
+#ifndef HEAD_BOOST_TRIGGER_MULT
+#define HEAD_BOOST_TRIGGER_MULT 2.0f
+#endif
+#ifndef HEAD_MAX_BOOST
+#define HEAD_MAX_BOOST 1.35f
+#endif
 
 // Static storage
 ConfigStore::ConfigData ConfigStore::_data = {};
@@ -101,7 +107,9 @@ const ConfigStore::ConfigData ConfigStore::_defaults = {
 	(int16_t)DEAD_CENTER,
 	(uint16_t)STALE_TIMEOUT_MS,
 	(int16_t)AIR_GAIN_PER_CYCLE,
-	(int16_t)HDG_GAIN_PER_CYCLE};
+	(int16_t)HDG_GAIN_PER_CYCLE,
+	(float)HEAD_BOOST_TRIGGER_MULT,
+	(float)HEAD_MAX_BOOST};
 bool ConfigStore::_dirty = false;
 
 // PROGMEM names
@@ -126,6 +134,8 @@ static const char n_deadCenter[] PROGMEM = "dead_center";
 static const char n_staleTimeoutMs[] PROGMEM = "stale_timeout_ms";
 static const char n_airGainPerCycle[] PROGMEM = "air_gain_per_cycle";
 static const char n_hdgGainPerCycle[] PROGMEM = "hdg_gain_per_cycle";
+static const char n_headBoostTriggerMult[] PROGMEM = "head_boost_trigger_mult";
+static const char n_headMaxBoost[] PROGMEM = "head_max_boost";
 
 ConfigStore::ConfigStore::Entry *ConfigStore::table()
 {
@@ -151,13 +161,15 @@ ConfigStore::ConfigStore::Entry *ConfigStore::table()
 		{(const __FlashStringHelper *)n_staleTimeoutMs, PT_U16, &_data.staleTimeoutMs, &_defaults.staleTimeoutMs},
 		{(const __FlashStringHelper *)n_airGainPerCycle, PT_I16, &_data.airGainPerCycle, &_defaults.airGainPerCycle},
 		{(const __FlashStringHelper *)n_hdgGainPerCycle, PT_I16, &_data.hdgGainPerCycle, &_defaults.hdgGainPerCycle},
+		{(const __FlashStringHelper *)n_headBoostTriggerMult, PT_FLOAT, &_data.headBoostTriggerMult, &_defaults.headBoostTriggerMult},
+		{(const __FlashStringHelper *)n_headMaxBoost, PT_FLOAT, &_data.headMaxBoost, &_defaults.headMaxBoost},
 	};
 	return entries;
 }
 
 size_t ConfigStore::tableSize()
 {
-	return 21; // keep in sync with entries above
+	return 23; // keep in sync with entries above
 }
 
 void ConfigStore::loadDefaultsIntoData()
@@ -186,7 +198,7 @@ ConfigStore::Entry *ConfigStore::find(const char *name)
 
 // EEPROM layout: [0..3] signature 'K','C','1','C'  [4] version  [5..] ConfigData binary
 static const uint8_t CFG_SIGNATURE[4] = {'K', 'C', '1', 'C'};
-static const uint8_t CFG_VERSION = 1;
+static const uint8_t CFG_VERSION = 2; // bumped due to added parameters
 
 void ConfigStore::begin()
 {
