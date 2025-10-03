@@ -145,7 +145,7 @@ Legend:
 
 41. Per-Motor Trim / Symmetric Start Threshold & Scaling  
     Status: DONE (2025-10-02)  
-    Description: IMPLEMENTED. Parameters added: `motor_start_us_l`, `motor_start_us_r`, `motor_scale_l`, `motor_scale_r`, `motor_start_region` with EEPROM persistence and README calibration guidance. Applied after expo + reversal, before PWM mapping. Telemetry values (RC, setpoints) remain unmodified; only final motor commands reflect correction. Version bumped to 0.3.0.
+    Description: IMPLEMENTED. Parameters added: `motor_start_us_l`, `motor_start_us_r`, `motor_scale_l`, `motor_scale_r`, `motor_start_region` with EEPROM persistence and README calibration guidance. Applied after expo + reversal, before PWM mapping. Telemetry values (RC, setpoints) remain unmodified; only final motor commands reflect correction. Initial completion bumped version to 0.3.0; project now at 0.3.1.0 under new 4-part scheme.
 
 ---
 
