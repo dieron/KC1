@@ -69,6 +69,14 @@ public:
 	static float headBoostTriggerMult() { return _data.headBoostTriggerMult; }
 	// Adaptive heading boost maximum multiplier (1.0 = no boost, 1.35 = +35% authority at large errors)
 	static float headMaxBoost() { return _data.headMaxBoost; }
+	// Motor start offset microseconds (applied symmetrically for small |cmd| just above zero)
+	static uint16_t motorStartUsL() { return _data.motorStartUsL; }
+	static uint16_t motorStartUsR() { return _data.motorStartUsR; }
+	// Motor scalar (per-motor thrust balance) 1.0 = no change
+	static float motorScaleL() { return _data.motorScaleL; }
+	static float motorScaleR() { return _data.motorScaleR; }
+	// Command-domain magnitude threshold under which start offset is applied
+	static uint16_t motorStartRegion() { return _data.motorStartRegion; }
 
 private:
 	struct ConfigData
@@ -96,6 +104,11 @@ private:
 		int16_t hdgGainPerCycle;	// Heading mode forward speed increment at full stick per loop
 		float headBoostTriggerMult; // Multiplier of deadband where boost begins (e.g. 2.0)
 		float headMaxBoost;			// Maximum adaptive boost multiplier (>=1.0)
+		uint16_t motorStartUsL;		// Start offset left (µs)
+		uint16_t motorStartUsR;		// Start offset right (µs)
+		float motorScaleL;			// Scale factor left
+		float motorScaleR;			// Scale factor right
+		uint16_t motorStartRegion;	// Command magnitude threshold for start offset (e.g. 150)
 	};
 
 	enum ParamType : uint8_t

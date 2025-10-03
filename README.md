@@ -1,6 +1,6 @@
 # KC1 — Kayak Controller (Arduino Uno)
 
-API Version: **0.2.0**
+API Version: **0.3.1.0**
 
 Differential‑thrust kayak controller with Normal, Air, and dedicated Heading (compass) modes, runtime serial configuration/telemetry API, and safety‑first arming & failsafe behaviors.
 
@@ -51,6 +51,12 @@ Heading & yaw correction:
 - `head_boost_trigger_mult` (Multiplier of deadband where adaptive yaw boost begins; default 2.0)
 - `head_max_boost` (Maximum adaptive yaw boost multiplier; default 1.35)
 
+Motor trim / thrust balancing:
+
+- `motor_start_us_l`, `motor_start_us_r` (µs-equivalent start offsets applied to small magnitude commands so both motors begin spinning together; default 0)
+- `motor_scale_l`, `motor_scale_r` (per-motor scalar applied to command magnitude after expo & reversal; default 1.0; clamped internally ~0.5–1.5)
+- `motor_start_region` (command-domain magnitude threshold under which start offsets are applied; default 150)
+
 Cruise / setpoint:
 
 - `air_gain_per_cycle` (Air mode incremental gain)
@@ -84,6 +90,7 @@ HEAD OFF
 HEAD SET <deg>
 HEAD TARGET
 RESET
+VERSION
 ```
 
 Telemetry line formats (examples):
@@ -104,6 +111,12 @@ Heading mode / compass control:
 Reset:
 
 - `RESET` disarms, neutralizes outputs, clears heading hold.
+
+Version / identity:
+
+- `VERSION` prints: `VERSION api=<semver> git=<hash> build=<DATE>T<TIME>`.
+  - `git` hash can be injected at build via PlatformIO `build_flags` (e.g. `-DKC1_GIT_HASH=\"abcd123\"`).
+  - If not supplied, shows `unknown`.
 
 ## Safety & Failsafes
 
@@ -143,6 +156,39 @@ pio run -e uno -t upload  # build + flash
 - Speed regime logic: stationary spin (bounded by `spinCmdMin/Max`), blended differential, or high‑speed one‑sided reduction.
 - Separate incremental forward cruise gain: `hdg_gain_per_cycle` (distinct from `air_gain_per_cycle`).
 
+## Motor Trim & Thrust Balancing
+
+Electric kayak drives often exhibit asymmetry: one ESC+motor may not start until a higher PWM value or may produce slightly more/less thrust for the same command. KC1 provides lightweight per‑motor trim parameters that act only at the output stage (they do not alter reported command-domain telemetry):
+
+1. Start Offsets (`motor_start_us_l`, `motor_start_us_r`)
+
+- Applied symmetrically (forward & reverse) when 0 < |command| < `motor_start_region`.
+- Conceptually adds a few microseconds worth of “kick” (in command-domain approximation) so a sluggish motor begins spinning as early as the other.
+- Not applied at exact neutral (command = 0).
+
+2. Scaling (`motor_scale_l`, `motor_scale_r`)
+
+- Multiplies the (possibly offset-adjusted) magnitude to balance sustained thrust.
+- Final magnitude is clamped to ±1000 before mapping to 1000–2000 µs.
+
+3. Start Region (`motor_start_region`)
+
+- Defines the command magnitude window (default 150) considered “near start” where offsets are applied.
+- Increasing widens the zone if a motor still lags at slightly higher low throttle.
+
+Telemetry Integrity: `cmdL`, `cmdR` shown in STATUS/ALL remain the post-trim commands (after scaling & offset) because they reflect actual thrust intent. RC inputs and heading/yaw setpoints are never modified by trim; only the mapping to final microseconds is influenced.
+
+### Suggested Calibration Procedure
+
+1. Ensure both `motor_scale_*` = 1.0 and `motor_start_us_*` = 0; leave `motor_start_region` at 150 initially.
+2. With the craft secure, slowly raise throttle in NORMAL mode from neutral and note the command value (approx yaw=0) where each motor first spins.
+3. If (for example) right motor starts noticeably later, increment `motor_start_us_r` (e.g. +10) and re-test until both begin within a small stick movement.
+4. Perform a low to mid (e.g. command ~400–500) forward thrust with yaw centered. If kayak drifts/yaws without yaw input, reduce scale of the stronger side or increase scale of the weaker side (`motor_scale_*` adjustments in small steps, e.g. 0.02–0.05).
+5. After changes, verify high-throttle symmetry; avoid pushing scale outside 0.8–1.2 unless hardware disparity is large.
+6. If a motor still lags slightly above the start offset window, raise `motor_start_region` (e.g. 200) and re-evaluate.
+
+Safety: Always perform calibration out of the water or firmly restrained. Small increments reduce risk of sudden yaw.
+
 ## Future / TODO (abridged)
 
 - Add yaw inversion runtime config (currently fixed inversion in code).
@@ -157,6 +203,62 @@ pio run -e uno -t upload  # build + flash
 4. Arm: center sticks, toggle CH3 (Normal) or CH4 (Air).
 5. Enter heading mode: `HEAD ON` (BNO055 required) or CH5 toggle.
 6. Adjust heading-mode cruise speed with throttle stick (center hold / forward increase / back decrease).
+
+## Parameter Quick Reference (Selected)
+
+| Category | Parameter                           | Default          | Notes                                         |
+| -------- | ----------------------------------- | ---------------- | --------------------------------------------- |
+| Heading  | heading_deadband_deg                | 5.0              | Error band where corrections stop / decay     |
+| Heading  | head_kp / head_ki / head_kd         | 3.5 / 0.05 / 0.8 | PID gains                                     |
+| Heading  | head_cmd_max                        | 400              | Max yaw command magnitude                     |
+| Heading  | head_boost_trigger_mult             | 2.0              | Multiplier of deadband where boost starts     |
+| Heading  | head_max_boost                      | 1.35             | Max adaptive boost factor                     |
+| Heading  | hdg_gain_per_cycle                  | 15               | Forward speed increment per loop (full stick) |
+| Air Mode | air_gain_per_cycle                  | 40               | Setpoint increment per loop (full stick)      |
+| Motors   | motor_expo_l / motor_expo_r         | 400              | Output shaping (0..1000)                      |
+| Motors   | motor_start_us_l / motor_start_us_r | 0                | Start offset (µs equiv)                       |
+| Motors   | motor_scale_l / motor_scale_r       | 1.0              | Per-motor thrust scalar                       |
+| Motors   | motor_start_region                  | 150              | Command magnitude zone for start offsets      |
+| Failsafe | stale_timeout_ms                    | 100              | Channel stale detection                       |
+| Failsafe | stuck_delta_us / stuck_cycles       | 1 / 75           | Stuck-signal heuristic                        |
+| Mixing   | spin_cmd_min / spin_cmd_max         | 180 / 700        | Stationary spin bounds                        |
+| Mixing   | speed_zero_thresh                   | 50               | Below -> treat as stationary                  |
+| Mixing   | speed_high_frac                     | 0.80             | Above -> high-speed yaw strategy              |
+
+Full list: `CFG LIST`.
+
+## Versioning Policy
+
+KC1 now uses a 4-part semantic version: MAJOR.MINOR.PATCH.HOTFIX
+
+- MAJOR: Manual bump for fundamental/architectural or backward-incompatible changes.
+- MINOR: Significant feature additions (e.g. new mode, large subsystem) that remain backward compatible.
+- PATCH: Incremented for smaller features, enhancements, new parameters, internal refactors that preserve compatibility.
+- HOTFIX: Urgent post-release corrections (regressions, critical bug) applied without other changes.
+
+Example progression: 0.3.1.0 (small enhancement) → 0.3.2.0 (another minor feature) → 0.3.2.1 (hotfix) → 0.4.0.0 (larger feature set) → 1.0.0.0 (stable milestone / external interface freeze candidate).
+
+## CHANGELOG (abridged)
+
+### 0.3.1.0
+
+- Introduced formal 4-part version scheme (MAJOR.MINOR.PATCH.HOTFIX) and bumped PATCH for this documentation/identity enhancement.
+- `VERSION` now reports the 4-part string (e.g. `0.3.1.0`).
+
+### 0.3.0
+
+- Added per-motor trim & scaling: `motor_start_us_l`, `motor_start_us_r`, `motor_scale_l`, `motor_scale_r`, `motor_start_region`.
+- Exposed configurable `motor_start_region` and integrated into output stage.
+- Documentation: Motor trim & thrust balancing section, quick reference table, changelog.
+
+### 0.2.x
+
+- Added adaptive heading boost (`head_boost_trigger_mult`, `head_max_boost`).
+- Dedicated Heading mode (MODE_HEADING) with incremental cruise speed (`hdg_gain_per_cycle`).
+
+### 0.1.x
+
+- Initial Normal & Air modes, RC capture, EEPROM config, basic heading hold.
 
 ## Disclaimer
 

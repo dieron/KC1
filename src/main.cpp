@@ -26,11 +26,55 @@
 #define DEBUG_STYLE 0
 #endif
 
+// ==== Firmware identity (4-part version: MAJOR.MINOR.PATCH.HOTFIX) ====
+// Versioning policy:
+//  - MAJOR (breaking architectural changes) updated manually.
+//  - MINOR ("big" feature sets / mode additions) increments for significant additions.
+//  - PATCH (small feature / enhancement / non-breaking additions) increments frequently.
+//  - HOTFIX (urgent post-release fix) increments only for targeted fixes; otherwise 0.
+// These can be overridden via build flags (e.g. PlatformIO build_flags).
+#ifndef KC1_VER_MAJOR
+#define KC1_VER_MAJOR 0
+#endif
+#ifndef KC1_VER_MINOR
+#define KC1_VER_MINOR 3
+#endif
+#ifndef KC1_VER_PATCH
+#define KC1_VER_PATCH 1
+#endif
+#ifndef KC1_VER_HOTFIX
+#define KC1_VER_HOTFIX 0
+#endif
+
+// Stringify helpers
+#define KC1_STR_HELPER(x) #x
+#define KC1_STR(x) KC1_STR_HELPER(x)
+
+#ifndef KC1_API_VERSION
+#define KC1_API_VERSION KC1_STR(KC1_VER_MAJOR) "." KC1_STR(KC1_VER_MINOR) "." KC1_STR(KC1_VER_PATCH) "." KC1_STR(KC1_VER_HOTFIX)
+#endif
+
+// Optionally define at build: -DKC1_GIT_HASH=\"abcdef1\"
+#ifndef KC1_GIT_HASH
+#define KC1_GIT_HASH "unknown"
+#endif
+#ifndef KC1_BUILD_DATE
+#define KC1_BUILD_DATE __DATE__
+#endif
+#ifndef KC1_BUILD_TIME
+#define KC1_BUILD_TIME __TIME__
+#endif
+
 // ========= Output configuration (dynamic via ConfigStore) =========
 static inline bool reverseLeft() { return ConfigStore::reverseLeft() != 0; }
 static inline bool reverseRight() { return ConfigStore::reverseRight() != 0; }
 static inline uint16_t motorExpoL() { return (uint16_t)ConfigStore::motorExpoL(); }
 static inline uint16_t motorExpoR() { return (uint16_t)ConfigStore::motorExpoR(); }
+static inline uint16_t cfgMotorStartUsL() { return ConfigStore::motorStartUsL(); }
+static inline uint16_t cfgMotorStartUsR() { return ConfigStore::motorStartUsR(); }
+static inline float cfgMotorScaleL() { return ConfigStore::motorScaleL(); }
+static inline float cfgMotorScaleR() { return ConfigStore::motorScaleR(); }
+static inline uint16_t cfgMotorStartRegion() { return ConfigStore::motorStartRegion(); }
 
 // ========= Heading hold (BNO055) ========= (always compiled; runtime enable via ConfigStore)
 
@@ -885,6 +929,7 @@ static void cmdHelp()
 {
 	Serial.println(F("Commands:"));
 	Serial.println(F("  HELP - list commands"));
+	Serial.println(F("  VERSION - firmware/api version & git hash"));
 	Serial.println(F("  CFG LIST - list all config params"));
 	Serial.println(F("  CFG GET <name> - read one param"));
 	Serial.println(F("  CFG SET <name> <val> - set param (auto-save)"));
@@ -998,6 +1043,19 @@ static void processLine(char *line)
 	if (icmp(tok, "HELP") == 0)
 	{
 		cmdHelp();
+		return;
+	}
+	if (icmp(tok, "VERSION") == 0)
+	{
+		Serial.print(F("VERSION api="));
+		Serial.print(F(KC1_API_VERSION));
+		Serial.print(F(" git="));
+		Serial.print(F(KC1_GIT_HASH));
+		Serial.print(F(" build="));
+		Serial.print(F(KC1_BUILD_DATE));
+		Serial.print(F("T"));
+		Serial.print(F(KC1_BUILD_TIME));
+		Serial.println();
 		return;
 	}
 	if (icmp(tok, "CFG") == 0)
@@ -1470,7 +1528,8 @@ void setup()
 	// Serial.begin(57600);
 	Serial.begin(9600);
 	delay(100);
-	Serial.println(F("KC1 - Kayak Controller (Uno) API v0.2.0"));
+	Serial.print(F("KC1 - Kayak Controller (Uno) API v"));
+	Serial.println(F(KC1_API_VERSION));
 	Serial.print(F("> "));
 	// Initialize persistent configuration (loads or creates defaults)
 	ConfigStore::begin();
@@ -1782,6 +1841,52 @@ void loop()
 				cmdL = -cmdL;
 			if (reverseRight())
 				cmdR = -cmdR;
+
+			// Per-motor start offset & scaling (affects final thrust symmetry). Applied symmetrically.
+			// Only apply start offset for small magnitude commands just above zero so motors spin up together.
+			int16_t origCmdL = cmdL;
+			int16_t origCmdR = cmdR;
+			uint16_t startL = cfgMotorStartUsL();
+			uint16_t startR = cfgMotorStartUsR();
+			float scaleL = cfgMotorScaleL();
+			float scaleR = cfgMotorScaleR();
+			if (scaleL < 0.5f)
+				scaleL = 0.5f;
+			else if (scaleL > 1.5f)
+				scaleL = 1.5f;
+			if (scaleR < 0.5f)
+				scaleR = 0.5f;
+			else if (scaleR > 1.5f)
+				scaleR = 1.5f;
+			// Region threshold for applying start offset (command domain)
+			int16_t startRegion = (int16_t)cfgMotorStartRegion();
+			if (startRegion < 0)
+				startRegion = 0;
+			else if (startRegion > 400)
+				startRegion = 400; // clamp reasonable range
+			if (cmdL != 0)
+			{
+				int16_t mag = abs(cmdL);
+				long scaled = (long)mag;
+				if (mag < startRegion && startL > 0)
+					scaled += startL; // add microsecond-equivalent offset in command space approximation
+				// Apply scale after offset approximation
+				scaled = (long)(scaled * scaleL);
+				if (scaled > 1000)
+					scaled = 1000;
+				cmdL = (cmdL > 0) ? (int16_t)scaled : (int16_t)(-scaled);
+			}
+			if (cmdR != 0)
+			{
+				int16_t mag = abs(cmdR);
+				long scaled = (long)mag;
+				if (mag < startRegion && startR > 0)
+					scaled += startR;
+				scaled = (long)(scaled * scaleR);
+				if (scaled > 1000)
+					scaled = 1000;
+				cmdR = (cmdR > 0) ? (int16_t)scaled : (int16_t)(-scaled);
+			}
 
 			uint16_t usL = mapSigned1000ToUs(cmdL);
 			uint16_t usR = mapSigned1000ToUs(cmdR);

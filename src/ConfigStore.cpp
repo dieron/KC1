@@ -83,6 +83,21 @@
 #ifndef HEAD_MAX_BOOST
 #define HEAD_MAX_BOOST 1.35f
 #endif
+#ifndef MOTOR_START_US_L
+#define MOTOR_START_US_L 0
+#endif
+#ifndef MOTOR_START_US_R
+#define MOTOR_START_US_R 0
+#endif
+#ifndef MOTOR_SCALE_L
+#define MOTOR_SCALE_L 1.0f
+#endif
+#ifndef MOTOR_SCALE_R
+#define MOTOR_SCALE_R 1.0f
+#endif
+#ifndef MOTOR_START_REGION
+#define MOTOR_START_REGION 150
+#endif
 
 // Static storage
 ConfigStore::ConfigData ConfigStore::_data = {};
@@ -109,7 +124,12 @@ const ConfigStore::ConfigData ConfigStore::_defaults = {
 	(int16_t)AIR_GAIN_PER_CYCLE,
 	(int16_t)HDG_GAIN_PER_CYCLE,
 	(float)HEAD_BOOST_TRIGGER_MULT,
-	(float)HEAD_MAX_BOOST};
+	(float)HEAD_MAX_BOOST,
+	(uint16_t)MOTOR_START_US_L,
+	(uint16_t)MOTOR_START_US_R,
+	(float)MOTOR_SCALE_L,
+	(float)MOTOR_SCALE_R,
+	(uint16_t)MOTOR_START_REGION};
 bool ConfigStore::_dirty = false;
 
 // PROGMEM names
@@ -136,6 +156,11 @@ static const char n_airGainPerCycle[] PROGMEM = "air_gain_per_cycle";
 static const char n_hdgGainPerCycle[] PROGMEM = "hdg_gain_per_cycle";
 static const char n_headBoostTriggerMult[] PROGMEM = "head_boost_trigger_mult";
 static const char n_headMaxBoost[] PROGMEM = "head_max_boost";
+static const char n_motorStartUsL[] PROGMEM = "motor_start_us_l";
+static const char n_motorStartUsR[] PROGMEM = "motor_start_us_r";
+static const char n_motorScaleL[] PROGMEM = "motor_scale_l";
+static const char n_motorScaleR[] PROGMEM = "motor_scale_r";
+static const char n_motorStartRegion[] PROGMEM = "motor_start_region";
 
 ConfigStore::ConfigStore::Entry *ConfigStore::table()
 {
@@ -163,13 +188,18 @@ ConfigStore::ConfigStore::Entry *ConfigStore::table()
 		{(const __FlashStringHelper *)n_hdgGainPerCycle, PT_I16, &_data.hdgGainPerCycle, &_defaults.hdgGainPerCycle},
 		{(const __FlashStringHelper *)n_headBoostTriggerMult, PT_FLOAT, &_data.headBoostTriggerMult, &_defaults.headBoostTriggerMult},
 		{(const __FlashStringHelper *)n_headMaxBoost, PT_FLOAT, &_data.headMaxBoost, &_defaults.headMaxBoost},
+		{(const __FlashStringHelper *)n_motorStartUsL, PT_U16, &_data.motorStartUsL, &_defaults.motorStartUsL},
+		{(const __FlashStringHelper *)n_motorStartUsR, PT_U16, &_data.motorStartUsR, &_defaults.motorStartUsR},
+		{(const __FlashStringHelper *)n_motorScaleL, PT_FLOAT, &_data.motorScaleL, &_defaults.motorScaleL},
+		{(const __FlashStringHelper *)n_motorScaleR, PT_FLOAT, &_data.motorScaleR, &_defaults.motorScaleR},
+		{(const __FlashStringHelper *)n_motorStartRegion, PT_U16, &_data.motorStartRegion, &_defaults.motorStartRegion},
 	};
 	return entries;
 }
 
 size_t ConfigStore::tableSize()
 {
-	return 23; // keep in sync with entries above
+	return 28; // keep in sync with entries above
 }
 
 void ConfigStore::loadDefaultsIntoData()
@@ -198,7 +228,7 @@ ConfigStore::Entry *ConfigStore::find(const char *name)
 
 // EEPROM layout: [0..3] signature 'K','C','1','C'  [4] version  [5..] ConfigData binary
 static const uint8_t CFG_SIGNATURE[4] = {'K', 'C', '1', 'C'};
-static const uint8_t CFG_VERSION = 2; // bumped due to added parameters
+static const uint8_t CFG_VERSION = 4; // bumped due to added motor_start_region parameter
 
 void ConfigStore::begin()
 {
