@@ -37,7 +37,7 @@
 #define KC1_VER_MAJOR 0
 #endif
 #ifndef KC1_VER_MINOR
-#define KC1_VER_MINOR 3
+#define KC1_VER_MINOR 4
 #endif
 #ifndef KC1_VER_PATCH
 #define KC1_VER_PATCH 1
@@ -932,6 +932,7 @@ static void cmdHelp()
 	Serial.println(F("  VERSION - firmware/api version & git hash"));
 	Serial.println(F("  CFG LIST - list all config params"));
 	Serial.println(F("  CFG GET <name> - read one param"));
+	Serial.println(F("  CFG META <name|ALL|JSON> - parameter schema/constraints"));
 	Serial.println(F("  CFG SET <name> <val> - set param (auto-save)"));
 	Serial.println(F("  CFG RESET - restore factory defaults"));
 	Serial.println(F("  CFG SAVE - force EEPROM save"));
@@ -1064,6 +1065,28 @@ static void processLine(char *line)
 		if (!sub)
 		{
 			replyErr(F("CFG missing sub"));
+			return;
+		}
+		if (icmp(sub, "META") == 0)
+		{
+			char *pname = nextToken(cursor);
+			if (!pname)
+			{
+				replyErr(F("usage META <name|ALL>"));
+				return;
+			}
+			if (icmp(pname, "JSON") == 0)
+			{
+				ConfigStore::metaJson(Serial);
+				return;
+			}
+			if (icmp(pname, "ALL") == 0)
+			{
+				ConfigStore::metaAll(Serial);
+				return;
+			}
+			if (!ConfigStore::metaOne(Serial, pname))
+				replyErr(F("no such param"));
 			return;
 		}
 		if (icmp(sub, "LIST") == 0)

@@ -53,11 +53,11 @@ Legend:
     Status: NOT  
     Description: In-RAM log of recent events (disarm causes, mode changes) `LOG SHOW` / `LOG CLEAR`.
 15. Version & Capability Discovery  
-    Status: NOT  
-    Description: `VERSION` (build id / git hash), `FEATURES` (CSV of CFG,TELEM,HEAD,STREAM,...).
+    Status: PART (2025-10-02)  
+    Description: `VERSION` (build id / git hash) implemented; `FEATURES` (CSV of CFG,TELEM,HEAD,STREAM,...) pending.
 16. Parameter Metadata Query  
-    Status: NOT  
-    Description: `CFG META <name>` or `CFG META ALL` returns type,min,max,recommended,units,description.
+    Status: DONE (2025-10-03)  
+    Description: Implemented. `CFG META <name>` / `CFG META ALL` print type, min, max, step, default, units, desc. Added `CFG META JSON` exporting an array of objects for client UIs.
 17. Autosave Toggle & Batch Config  
     Status: NOT  
     Description: `CFG AUTOSAVE ON|OFF`; `CFG BATCH BEGIN/SET/COMMIT/ABORT` for atomic multi-param updates.
@@ -110,8 +110,8 @@ Legend:
 ## Build / Identity / Maintenance
 
 31. Firmware Build ID / Git Hash  
-    Status: NOT  
-    Description: Compile-time string (e.g. short hash + date) accessible via VERSION.
+    Status: DONE (2025-10-02)  
+    Description: Implemented. Git short hash injected at build via extra script; `VERSION` prints `api`, `git`, and `build` date/time.
 32. Baud Rate / Throughput Strategy  
     Status: NOT  
     Description: Option to switch to 230400 (or configurable) & guidance for app selection.
@@ -145,7 +145,11 @@ Legend:
 
 41. Per-Motor Trim / Symmetric Start Threshold & Scaling  
     Status: DONE (2025-10-02)  
-    Description: IMPLEMENTED. Parameters added: `motor_start_us_l`, `motor_start_us_r`, `motor_scale_l`, `motor_scale_r`, `motor_start_region` with EEPROM persistence and README calibration guidance. Applied after expo + reversal, before PWM mapping. Telemetry values (RC, setpoints) remain unmodified; only final motor commands reflect correction. Initial completion bumped version to 0.3.0; project now at 0.3.1.0 under new 4-part scheme.
+    Description: IMPLEMENTED. Parameters added: `motor_start_us_l`, `motor_start_us_r`, `motor_scale_l`, `motor_scale_r`, `motor_start_region` with EEPROM persistence and README calibration guidance. Applied after expo + reversal, before PWM mapping. Telemetry values (RC, setpoints) remain unmodified; only final motor commands reflect correction. Initial completion bumped version to 0.3.0; project later progressed to 0.4.0.0 under the 4-part scheme.
+
+42. ConfigStore Parameter Schema & Constraints  
+    Status: DONE (2025-10-03)  
+    Description: IMPLEMENTED. Per-parameter schema (min, max, step, units, description, default) added. `CFG SET` now clamps to bounds and snaps to step. API exposes schema via `CFG META <name>`, `CFG META ALL`, and `CFG META JSON` (array of objects) for app settings UIs. (Related: #16 DONE; #37 cross-parameter validation pending.)
 
 ---
 

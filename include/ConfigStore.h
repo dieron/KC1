@@ -9,6 +9,26 @@
 class ConfigStore
 {
 public:
+	// Public type info for metadata
+	enum ParamType : uint8_t
+	{
+		PT_U8,
+		PT_U16,
+		PT_I16,
+		PT_FLOAT
+	};
+
+	// Metadata describing constraints and docs
+	struct Meta
+	{
+		const __FlashStringHelper *name; // matches Entry name
+		ParamType type;
+		float minVal; // numeric bounds (for booleans use 0..1 with step=1)
+		float maxVal;
+		float step;						  // UI hint; when >0 we quantize to nearest step in set()
+		const __FlashStringHelper *units; // short label or empty
+		const __FlashStringHelper *desc;  // brief description
+	};
 	// Call once in setup(). Loads from EEPROM or writes defaults if signature missing.
 	static void begin();
 	// Save current configuration explicitly (normally auto after set()).
@@ -25,6 +45,14 @@ public:
 	static bool set(const char *name, float newVal);
 	// Print all parameters and values to a Stream (e.g. Serial).
 	static void list(Stream &s);
+
+	// ---------- Parameter Metadata (Schema) ----------
+	// Print metadata for a single parameter. Returns false if not found.
+	static bool metaOne(Stream &s, const char *name);
+	// Print metadata for all parameters.
+	static void metaAll(Stream &s);
+	// Print metadata for all parameters in JSON format.
+	static void metaJson(Stream &s);
 
 	// ---------------- Parameter Getters ----------------
 	// Motor direction reversal flags (0 = normal, 1 = invert). Applied after expo, before mapping to microseconds.
@@ -110,14 +138,6 @@ private:
 		float motorScaleR;			// Scale factor right
 		uint16_t motorStartRegion;	// Command magnitude threshold for start offset (e.g. 150)
 	};
-
-	enum ParamType : uint8_t
-	{
-		PT_U8,
-		PT_U16,
-		PT_I16,
-		PT_FLOAT
-	};
 	struct Entry
 	{
 		const __FlashStringHelper *name; // PROGMEM string
@@ -133,4 +153,7 @@ private:
 	static Entry *table();
 	static size_t tableSize();
 	static Entry *find(const char *name);
+	static const Meta *metaTable();
+	static size_t metaSize();
+	static const Meta *findMeta(const char *name);
 };

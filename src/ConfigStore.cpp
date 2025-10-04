@@ -202,6 +202,85 @@ size_t ConfigStore::tableSize()
 	return 28; // keep in sync with entries above
 }
 
+// ---------------- Metadata (schema) ----------------
+// PROGMEM unit strings and descriptions (short to conserve flash)
+static const char u_bool[] PROGMEM = "bool";
+static const char u_none[] PROGMEM = "";
+static const char u_deg[] PROGMEM = "deg";
+static const char u_frac[] PROGMEM = "frac";
+static const char u_us[] PROGMEM = "us";
+static const char d_rev[] PROGMEM = "Invert motor direction";
+static const char d_expo[] PROGMEM = "Output expo 0..1000";
+static const char d_hold[] PROGMEM = "Enable heading hold";
+static const char d_hdb[] PROGMEM = "Heading deadband";
+static const char d_pid[] PROGMEM = "Heading PID gain";
+static const char d_cmdmax[] PROGMEM = "Max yaw cmd";
+static const char d_zero[] PROGMEM = "Stationary threshold";
+static const char d_high[] PROGMEM = "High speed fraction";
+static const char d_spinmin[] PROGMEM = "Spin min";
+static const char d_spinmax[] PROGMEM = "Spin max";
+static const char d_fs[] PROGMEM = "Stuck-signal failsafe";
+static const char d_stuckd[] PROGMEM = "Stuck delta";
+static const char d_stuckc[] PROGMEM = "Stuck cycles";
+static const char d_dead[] PROGMEM = "Input deadband";
+static const char d_stale[] PROGMEM = "Stale timeout";
+static const char d_airg[] PROGMEM = "Air gain per cycle";
+static const char d_hdgg[] PROGMEM = "Heading gain per cycle";
+static const char d_boost_trig[] PROGMEM = "Boost trigger x deadband";
+static const char d_boost_max[] PROGMEM = "Max boost multiplier";
+static const char d_mstart[] PROGMEM = "Motor start offset";
+static const char d_mscale[] PROGMEM = "Motor scale";
+static const char d_mregion[] PROGMEM = "Start region";
+
+static const ConfigStore::Meta kMeta[] = {
+	{(const __FlashStringHelper *)n_reverseLeft, ConfigStore::PT_U8, 0, 1, 1, (const __FlashStringHelper *)u_bool, (const __FlashStringHelper *)d_rev},
+	{(const __FlashStringHelper *)n_reverseRight, ConfigStore::PT_U8, 0, 1, 1, (const __FlashStringHelper *)u_bool, (const __FlashStringHelper *)d_rev},
+	{(const __FlashStringHelper *)n_motorExpoL, ConfigStore::PT_U16, 0, 1000, 1, (const __FlashStringHelper *)u_none, (const __FlashStringHelper *)d_expo},
+	{(const __FlashStringHelper *)n_motorExpoR, ConfigStore::PT_U16, 0, 1000, 1, (const __FlashStringHelper *)u_none, (const __FlashStringHelper *)d_expo},
+	{(const __FlashStringHelper *)n_headingHoldEn, ConfigStore::PT_U8, 0, 1, 1, (const __FlashStringHelper *)u_bool, (const __FlashStringHelper *)d_hold},
+	{(const __FlashStringHelper *)n_headingDeadband, ConfigStore::PT_FLOAT, 0.0f, 30.0f, 0.1f, (const __FlashStringHelper *)u_deg, (const __FlashStringHelper *)d_hdb},
+	{(const __FlashStringHelper *)n_headKp, ConfigStore::PT_FLOAT, 0.0f, 10.0f, 0.05f, (const __FlashStringHelper *)u_none, (const __FlashStringHelper *)d_pid},
+	{(const __FlashStringHelper *)n_headKi, ConfigStore::PT_FLOAT, 0.0f, 2.0f, 0.01f, (const __FlashStringHelper *)u_none, (const __FlashStringHelper *)d_pid},
+	{(const __FlashStringHelper *)n_headKd, ConfigStore::PT_FLOAT, 0.0f, 5.0f, 0.01f, (const __FlashStringHelper *)u_none, (const __FlashStringHelper *)d_pid},
+	{(const __FlashStringHelper *)n_headCmdMax, ConfigStore::PT_FLOAT, 50.0f, 1000.0f, 5.0f, (const __FlashStringHelper *)u_none, (const __FlashStringHelper *)d_cmdmax},
+	{(const __FlashStringHelper *)n_speedZeroThresh, ConfigStore::PT_U16, 0, 200, 1, (const __FlashStringHelper *)u_none, (const __FlashStringHelper *)d_zero},
+	{(const __FlashStringHelper *)n_speedHighFrac, ConfigStore::PT_FLOAT, 0.0f, 1.0f, 0.01f, (const __FlashStringHelper *)u_frac, (const __FlashStringHelper *)d_high},
+	{(const __FlashStringHelper *)n_spinCmdMin, ConfigStore::PT_U16, 0, 1000, 1, (const __FlashStringHelper *)u_none, (const __FlashStringHelper *)d_spinmin},
+	{(const __FlashStringHelper *)n_spinCmdMax, ConfigStore::PT_U16, 0, 1000, 1, (const __FlashStringHelper *)u_none, (const __FlashStringHelper *)d_spinmax},
+	{(const __FlashStringHelper *)n_failsafeStuckThr, ConfigStore::PT_U8, 0, 1, 1, (const __FlashStringHelper *)u_bool, (const __FlashStringHelper *)d_fs},
+	{(const __FlashStringHelper *)n_stuckDeltaUs, ConfigStore::PT_U16, 0, 50, 1, (const __FlashStringHelper *)u_us, (const __FlashStringHelper *)d_stuckd},
+	{(const __FlashStringHelper *)n_stuckCycles, ConfigStore::PT_U16, 1, 1000, 1, (const __FlashStringHelper *)u_none, (const __FlashStringHelper *)d_stuckc},
+	{(const __FlashStringHelper *)n_deadCenter, ConfigStore::PT_I16, 0, 500, 1, (const __FlashStringHelper *)u_none, (const __FlashStringHelper *)d_dead},
+	{(const __FlashStringHelper *)n_staleTimeoutMs, ConfigStore::PT_U16, 20, 2000, 10, (const __FlashStringHelper *)u_none, (const __FlashStringHelper *)d_stale},
+	{(const __FlashStringHelper *)n_airGainPerCycle, ConfigStore::PT_I16, 0, 200, 1, (const __FlashStringHelper *)u_none, (const __FlashStringHelper *)d_airg},
+	{(const __FlashStringHelper *)n_hdgGainPerCycle, ConfigStore::PT_I16, 0, 200, 1, (const __FlashStringHelper *)u_none, (const __FlashStringHelper *)d_hdgg},
+	{(const __FlashStringHelper *)n_headBoostTriggerMult, ConfigStore::PT_FLOAT, 1.0f, 5.0f, 0.1f, (const __FlashStringHelper *)u_none, (const __FlashStringHelper *)d_boost_trig},
+	{(const __FlashStringHelper *)n_headMaxBoost, ConfigStore::PT_FLOAT, 1.0f, 2.0f, 0.01f, (const __FlashStringHelper *)u_none, (const __FlashStringHelper *)d_boost_max},
+	{(const __FlashStringHelper *)n_motorStartUsL, ConfigStore::PT_U16, 0, 200, 1, (const __FlashStringHelper *)u_us, (const __FlashStringHelper *)d_mstart},
+	{(const __FlashStringHelper *)n_motorStartUsR, ConfigStore::PT_U16, 0, 200, 1, (const __FlashStringHelper *)u_us, (const __FlashStringHelper *)d_mstart},
+	{(const __FlashStringHelper *)n_motorScaleL, ConfigStore::PT_FLOAT, 0.5f, 1.5f, 0.01f, (const __FlashStringHelper *)u_none, (const __FlashStringHelper *)d_mscale},
+	{(const __FlashStringHelper *)n_motorScaleR, ConfigStore::PT_FLOAT, 0.5f, 1.5f, 0.01f, (const __FlashStringHelper *)u_none, (const __FlashStringHelper *)d_mscale},
+	{(const __FlashStringHelper *)n_motorStartRegion, ConfigStore::PT_U16, 0, 400, 1, (const __FlashStringHelper *)u_none, (const __FlashStringHelper *)d_mregion},
+};
+
+const ConfigStore::Meta *ConfigStore::metaTable() { return kMeta; }
+size_t ConfigStore::metaSize() { return sizeof(kMeta) / sizeof(kMeta[0]); }
+
+const ConfigStore::Meta *ConfigStore::findMeta(const char *name)
+{
+	if (!name)
+		return nullptr;
+	for (size_t i = 0, n = metaSize(); i < n; ++i)
+	{
+		char buf[26];
+		strncpy_P(buf, (PGM_P)kMeta[i].name, sizeof(buf) - 1);
+		buf[sizeof(buf) - 1] = '\0';
+		if (strcmp(buf, name) == 0)
+			return &kMeta[i];
+	}
+	return nullptr;
+}
+
 void ConfigStore::loadDefaultsIntoData()
 {
 	_data = _defaults;
@@ -322,6 +401,24 @@ bool ConfigStore::set(const char *name, float newVal)
 	Entry *e = find(name);
 	if (!e)
 		return false;
+	// Apply metadata constraints if available (min/max and optional step quantization)
+	const Meta *m = findMeta(name);
+	if (m)
+	{
+		// Clamp to [min,max]
+		if (newVal < m->minVal)
+			newVal = m->minVal;
+		if (newVal > m->maxVal)
+			newVal = m->maxVal;
+		// Quantize to step if meaningful
+		float step = m->step;
+		if (step > 0.0f)
+		{
+			float base = m->minVal;
+			long k = (long)((newVal - base) / step + 0.5f);
+			newVal = base + k * step;
+		}
+	}
 	bool changed = false;
 	switch (e->type)
 	{
@@ -407,4 +504,179 @@ void ConfigStore::list(Stream &s)
 			break;
 		}
 	}
+}
+
+// Metadata printing helpers
+static void printNameFromFlash(Stream &s, const __FlashStringHelper *f)
+{
+	char buf[64];
+	strncpy_P(buf, (PGM_P)f, sizeof(buf) - 1);
+	buf[sizeof(buf) - 1] = '\0';
+	s.print(buf);
+}
+
+bool ConfigStore::metaOne(Stream &s, const char *name)
+{
+	const Meta *m = findMeta(name);
+	if (!m)
+		return false;
+	// Emit: META name=... type=U16 def=<default> min=<..> max=<..> step=<..> units=.. desc=".."
+	s.print(F("META "));
+	s.print(name);
+	s.print(F(" type="));
+	switch (m->type)
+	{
+	case PT_U8:
+		s.print(F("U8"));
+		break;
+	case PT_U16:
+		s.print(F("U16"));
+		break;
+	case PT_I16:
+		s.print(F("I16"));
+		break;
+	case PT_FLOAT:
+		s.print(F("F32"));
+		break;
+	default:
+		s.print(F("?"));
+		break;
+	}
+	// default value from defaults struct matching Entry
+	float defVal = 0;
+	float curVal = 0;
+	get(name, curVal);
+	Entry *e = find(name);
+	if (e)
+	{
+		switch (e->type)
+		{
+		case PT_U8:
+			defVal = *(uint8_t *)e->defaultPtr;
+			break;
+		case PT_U16:
+			defVal = *(uint16_t *)e->defaultPtr;
+			break;
+		case PT_I16:
+			defVal = *(int16_t *)e->defaultPtr;
+			break;
+		case PT_FLOAT:
+			defVal = *(float *)e->defaultPtr;
+			break;
+		}
+	}
+	s.print(F(" def="));
+	s.print(defVal, 4);
+	s.print(F(" min="));
+	s.print(m->minVal, 4);
+	s.print(F(" max="));
+	s.print(m->maxVal, 4);
+	s.print(F(" step="));
+	s.print(m->step, 4);
+	s.print(F(" units="));
+	printNameFromFlash(s, m->units);
+	s.print(F(" desc=\""));
+	printNameFromFlash(s, m->desc);
+	s.print(F("\""));
+	s.println();
+	return true;
+}
+
+void ConfigStore::metaAll(Stream &s)
+{
+	for (size_t i = 0, n = metaSize(); i < n; ++i)
+	{
+		char nameBuf[26];
+		strncpy_P(nameBuf, (PGM_P)kMeta[i].name, sizeof(nameBuf) - 1);
+		nameBuf[sizeof(nameBuf) - 1] = '\0';
+		(void)metaOne(s, nameBuf);
+	}
+}
+
+static void printJsonEsc(Stream &s, const __FlashStringHelper *f)
+{
+	char buf[96];
+	strncpy_P(buf, (PGM_P)f, sizeof(buf) - 1);
+	buf[sizeof(buf) - 1] = '\0';
+	// Simple escape for quotes and backslashes
+	for (char *p = buf; *p; ++p)
+	{
+		if (*p == '"' || *p == '\\')
+		{
+			s.print('\\');
+		}
+		s.print(*p);
+	}
+}
+
+void ConfigStore::metaJson(Stream &s)
+{
+	s.print('[');
+	for (size_t i = 0, n = metaSize(); i < n; ++i)
+	{
+		if (i)
+			s.print(',');
+		const Meta &m = kMeta[i];
+		char nameBuf[26];
+		strncpy_P(nameBuf, (PGM_P)m.name, sizeof(nameBuf) - 1);
+		nameBuf[sizeof(nameBuf) - 1] = '\0';
+		Entry *e = find(nameBuf);
+		float defVal = 0;
+		if (e)
+		{
+			switch (e->type)
+			{
+			case PT_U8:
+				defVal = *(uint8_t *)e->defaultPtr;
+				break;
+			case PT_U16:
+				defVal = *(uint16_t *)e->defaultPtr;
+				break;
+			case PT_I16:
+				defVal = *(int16_t *)e->defaultPtr;
+				break;
+			case PT_FLOAT:
+				defVal = *(float *)e->defaultPtr;
+				break;
+			}
+		}
+		s.print('{');
+		s.print(F("\"name\":\""));
+		s.print(nameBuf);
+		s.print('"');
+		s.print(F(",\"type\":\""));
+		switch (m.type)
+		{
+		case PT_U8:
+			s.print(F("U8"));
+			break;
+		case PT_U16:
+			s.print(F("U16"));
+			break;
+		case PT_I16:
+			s.print(F("I16"));
+			break;
+		case PT_FLOAT:
+			s.print(F("F32"));
+			break;
+		}
+		s.print('"');
+		s.print(F(",\"min\":"));
+		s.print(m.minVal, 4);
+		s.print(F(",\"max\":"));
+		s.print(m.maxVal, 4);
+		s.print(F(",\"step\":"));
+		s.print(m.step, 4);
+		s.print(F(",\"default\":"));
+		s.print(defVal, 4);
+		s.print(F(",\"units\":\""));
+		printJsonEsc(s, m.units);
+		s.print('"');
+		s.print(F(",\"desc\":\""));
+		printJsonEsc(s, m.desc);
+		s.print('"');
+		s.print('}');
+	}
+	s.print(']');
+	s.println();
 }

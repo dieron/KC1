@@ -2,7 +2,7 @@
 
 > Disclaimer: This project is developed purely via vibe-coding. No manual code edits or fixes are performed; the code isn’t always reviewed. Despite that, the controller is used on a real kayak on the water.
 
-API Version: **0.3.1.0**
+API Version: **0.4.0.0**
 
 Differential‑thrust kayak controller with Normal, Air, and dedicated Heading (compass) modes, runtime serial configuration/telemetry API, and safety‑first arming & failsafe behaviors.
 
@@ -94,6 +94,9 @@ HEAD TARGET
 RESET
 VERSION
 ```
+
+- `CFG META JSON` prints a JSON array of parameter metadata objects with fields:
+  `name,type,min,max,step,default,units,desc`.
 
 Telemetry line formats (examples):
 
@@ -241,6 +244,11 @@ KC1 now uses a 4-part semantic version: MAJOR.MINOR.PATCH.HOTFIX
 Example progression: 0.3.1.0 (small enhancement) → 0.3.2.0 (another minor feature) → 0.3.2.1 (hotfix) → 0.4.0.0 (larger feature set) → 1.0.0.0 (stable milestone / external interface freeze candidate).
 
 ## CHANGELOG (abridged)
+
+### 0.4.0.0
+
+- Added schema/metadata API: `CFG META <name|ALL|JSON>`, `CFG SET` now clamps values to schema and snaps to step.
+- JSON export for client settings UIs.
 
 ### 0.3.1.0
 
