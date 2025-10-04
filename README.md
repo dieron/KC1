@@ -1,5 +1,7 @@
 # KC1 — Kayak Controller (Arduino Uno)
 
+> Disclaimer: This project is developed purely via vibe-coding. No manual code edits or fixes are performed; the code isn’t always reviewed. Despite that, the controller is used on a real kayak on the water.
+
 API Version: **0.3.1.0**
 
 Differential‑thrust kayak controller with Normal, Air, and dedicated Heading (compass) modes, runtime serial configuration/telemetry API, and safety‑first arming & failsafe behaviors.
