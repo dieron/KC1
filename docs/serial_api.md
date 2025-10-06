@@ -1,6 +1,6 @@
-# KC1 Serial Configuration & Telemetry API (v1)
+# KC1 Serial Configuration & Telemetry API (v2)
 
-Baud: 115200 8N1
+Baud: 9600 8N1
 Line endings: LF or CRLF (both terminate). Prompt: `>` after each processed line.
 Commands: Case-insensitive. Tokens separated by one or more spaces or tabs.
 
@@ -13,8 +13,10 @@ Responses:
 
 ```
 HELP
+VERSION
 CFG LIST
 CFG GET <name>
+CFG META <name|ALL|JSON>
 CFG SET <name> <value>
 CFG RESET
 CFG SAVE
@@ -30,32 +32,66 @@ HEAD TARGET
 RESET
 ```
 
+## VERSION Command
+
+Returns firmware version, optional git hash, and build date/time:
+
+```
+VERSION api=0.4.0.0 git=6c61ac7 build=Oct  3 2025T12:34:56
+```
+
 ## Configuration Parameters
 
-Names correspond exactly to internal storage fields (snake_case). Types drive coercion & clamping.
+All parameters now have schema metadata including min/max bounds, step size, units, and descriptions. `CFG SET` automatically clamps values to valid ranges and quantizes to step increments.
 
-| Name                 | Type  | Stored Range (enforced) | Practical / Recommended Range | Description                                            |
-| -------------------- | ----- | ----------------------- | ----------------------------- | ------------------------------------------------------ | --- | ---------------------------- |
-| reverse_left         | u8    | 0..255                  | 0 or 1                        | Invert left motor output sign                          |
-| reverse_right        | u8    | 0..255                  | 0 or 1                        | Invert right motor output sign                         |
-| motor_expo_l         | u16   | 0..65535                | 0..1000                       | Expo shaping left motor (0 linear)                     |
-| motor_expo_r         | u16   | 0..65535                | 0..1000                       | Expo shaping right motor                               |
-| heading_hold_en      | u8    | 0..255                  | 0 or 1                        | Master enable for heading hold feature                 |
-| heading_deadband_deg | float | IEEE32                  | 0.5..15 (typ 5)               | Error band disabling corrections / bleeding integrator |
-| head_kp              | float | IEEE32                  | 0.5..8 (typ 3.5)              | Proportional gain deg -> command units                 |
-| head_ki              | float | IEEE32                  | 0.0..0.5 (typ 0.05)           | Integral gain deg\*s -> command                        |
-| head_kd              | float | IEEE32                  | 0.0..2.0 (typ 0.8)            | Derivative gain deg/s -> command                       |
-| head_cmd_max         | float | IEEE32                  | 50..800 (typ 400)             | Absolute clamp on PID output (command units)           |
-| speed_zero_thresh    | u16   | 0..65535                | 0..300 (typ 50)               | Avg                                                    | cmd | below => treat as stationary |
-| speed_high_frac      | float | IEEE32                  | 0.2..1.0 (typ 0.80)           | Fraction of full output considered "high speed"        |
-| spin_cmd_min         | u16   | 0..65535                | 50..400 (typ 180)             | Minimum spin command magnitude at rest                 |
-| spin_cmd_max         | u16   | 0..65535                | 200..1000 (typ 700)           | Maximum spin command magnitude at rest                 |
-| failsafe_stuck_thr   | u8    | 0..255                  | 0 or 1                        | Enable stuck-signal neutral hold heuristic             |
-| stuck_delta_us       | u16   | 0..65535                | 1..10 (typ 1)                 | Max pulse width delta to count as unchanged            |
-| stuck_cycles         | u16   | 0..65535                | 20..200 (typ 75)              | Consecutive stable cycles to trigger hold              |
-| dead_center          | i16   | -32768..32767           | 0..200 (typ 50)               | Stick deadband in command units                        |
-| stale_timeout_ms     | u16   | 0..65535                | 60..250 (typ 100)             | Channel stale threshold (ms)                           |
-| air_gain_per_cycle   | i16   | -32768..32767           | 10..100 (typ 40)              | Air mode setpoint increment scale                      |
+### Parameter Schema Discovery
+
+- `CFG META <name>` - Get metadata for one parameter
+- `CFG META ALL` - Get metadata for all parameters (text format)
+- `CFG META JSON` - Get metadata as JSON array for client UIs
+
+Example metadata output:
+
+```
+META head_kp type=F32 def=3.5000 min=0.0000 max=10.0000 step=0.0500 units= desc="Heading PID gain"
+```
+
+JSON format returns an array of objects with fields: `name`, `type`, `min`, `max`, `step`, `default`, `units`, `desc`.
+
+### Complete Parameter List
+
+Names correspond exactly to internal storage fields (snake_case). All parameters now enforce schema constraints.
+
+| Name                    | Type | Min  | Max    | Step | Default | Description                                            |
+| ----------------------- | ---- | ---- | ------ | ---- | ------- | ------------------------------------------------------ |
+| reverse_left            | U8   | 0    | 1      | 1    | 0       | Invert left motor output sign                          |
+| reverse_right           | U8   | 0    | 1      | 1    | 0       | Invert right motor output sign                         |
+| motor_expo_l            | U16  | 0    | 1000   | 1    | 400     | Expo shaping left motor (0 linear)                     |
+| motor_expo_r            | U16  | 0    | 1000   | 1    | 400     | Expo shaping right motor                               |
+| heading_hold_en         | U8   | 0    | 1      | 1    | 1       | Master enable for heading hold feature                 |
+| heading_deadband_deg    | F32  | 0.0  | 30.0   | 0.1  | 5.0     | Error band disabling corrections / bleeding integrator |
+| head_kp                 | F32  | 0.0  | 10.0   | 0.05 | 3.5     | Proportional gain deg -> command units                 |
+| head_ki                 | F32  | 0.0  | 2.0    | 0.01 | 0.05    | Integral gain deg\*s -> command                        |
+| head_kd                 | F32  | 0.0  | 5.0    | 0.01 | 0.8     | Derivative gain deg/s -> command                       |
+| head_cmd_max            | F32  | 50.0 | 1000.0 | 5.0  | 400.0   | Absolute clamp on PID output (command units)           |
+| speed_zero_thresh       | U16  | 0    | 200    | 1    | 50      | Avg cmd below => treat as stationary                   |
+| speed_high_frac         | F32  | 0.0  | 1.0    | 0.01 | 0.80    | Fraction of full output considered "high speed"        |
+| spin_cmd_min            | U16  | 0    | 1000   | 1    | 180     | Minimum spin command magnitude at rest                 |
+| spin_cmd_max            | U16  | 0    | 1000   | 1    | 700     | Maximum spin command magnitude at rest                 |
+| failsafe_stuck_thr      | U8   | 0    | 1      | 1    | 1       | Enable stuck-signal neutral hold heuristic             |
+| stuck_delta_us          | U16  | 0    | 50     | 1    | 1       | Max pulse width delta to count as unchanged            |
+| stuck_cycles            | U16  | 1    | 1000   | 1    | 75      | Consecutive stable cycles to trigger hold              |
+| dead_center             | I16  | 0    | 500    | 1    | 50      | Stick deadband in command units                        |
+| stale_timeout_ms        | U16  | 20   | 2000   | 10   | 100     | Channel stale threshold (ms)                           |
+| air_gain_per_cycle      | I16  | 0    | 200    | 1    | 40      | Air mode setpoint increment scale                      |
+| hdg_gain_per_cycle      | I16  | 0    | 200    | 1    | 15      | Heading mode forward speed increment scale             |
+| head_boost_trigger_mult | F32  | 1.0  | 5.0    | 0.1  | 2.0     | Boost trigger x deadband                               |
+| head_max_boost          | F32  | 1.0  | 2.0    | 0.01 | 1.35    | Max boost multiplier                                   |
+| motor_start_us_l        | U16  | 0    | 200    | 1    | 0       | Motor start offset left (µs equiv)                     |
+| motor_start_us_r        | U16  | 0    | 200    | 1    | 0       | Motor start offset right (µs equiv)                    |
+| motor_scale_l           | F32  | 0.5  | 1.5    | 0.01 | 1.0     | Motor scale factor left                                |
+| motor_scale_r           | F32  | 0.5  | 1.5    | 0.01 | 1.0     | Motor scale factor right                               |
+| motor_start_region      | U16  | 0    | 400    | 1    | 150     | Start region threshold                                 |
 
 Example LIST output snippet:
 
@@ -82,7 +118,7 @@ CFG SET head_kp 4.2
 OK head_kp=4.2000
 ```
 
-Value is clamped to the stored type range; reply shows the final stored value.
+Value is automatically clamped to schema min/max bounds and quantized to step increments. Reply shows the final stored value after validation.
 
 ### CFG RESET / CFG SAVE
 
@@ -98,8 +134,10 @@ All telemetry commands return a single line except `TELEM ALL` (single line aggr
 Format:
 
 ```
-STATUS mode=<DIS|NRM|AIR> armed=<0|1> hold=<0|1> bno=<0|1> fsHold=<0|1> cmdL=<int> cmdR=<int> usL=<int> usR=<int>
+STATUS mode=<DIS|NRM|AIR|HDG> armed=<0|1> bno=<0|1> fsHold=<0|1> cmdL=<int> cmdR=<int> usL=<int> usR=<int>
 ```
+
+Mode values: DIS (disarmed), NRM (normal), AIR (air mode), HDG (heading mode).
 
 ### TELEM RC
 
@@ -126,7 +164,7 @@ HEADING bno=<0|1> cur=<deg?> hold=<0|1> [tgt=<deg> err=<deg>]
 Combines STATUS, RC, MOTORS, HEADING into one line:
 
 ```
-ALL mode=<..> armed=.. hold=.. bno=.. fsHold=.. yawUs=.. thrUs=.. nUs=.. aUs=.. hUs=.. yaw=.. thr=.. cmdL=.. cmdR=.. usL=.. usR=.. [curH=.. [tgtH=.. errH=..]]
+ALL mode=<DIS|NRM|AIR|HDG> armed=<0|1> hold=<0|1> bno=<0|1> fsHold=<0|1> yawUs=<us> thrUs=<us> nUs=<us> aUs=<us> hUs=<us> yaw=<-1000..1000> thr=<-1000..1000> cmdL=<int> cmdR=<int> usL=<int> usR=<int> [curH=<deg> [tgtH=<deg> errH=<deg>]]
 ```
 
 ## Heading Commands
@@ -151,10 +189,16 @@ Errors:
 ## Examples
 
 ```
+> version
+VERSION api=0.4.0.0 git=6c61ac7 build=Oct  3 2025T12:34:56
+> cfg meta head_kp
+META head_kp type=F32 def=3.5000 min=0.0000 max=10.0000 step=0.0500 units= desc="Heading PID gain"
 > cfg set head_kp 4.0
 OK head_kp=4.0000
+> cfg meta json
+[{"name":"reverse_left","type":"U8","min":0.0000,"max":1.0000,"step":1.0000,"default":0.0000,"units":"bool","desc":"Invert motor direction"},...]
 > head on
-HEAD ON target=42.15
+HEAD MODE ON tgt=42.15
 > telem heading
 HEADING bno=1 cur=42.15 hold=1 tgt=42.15 err=0.00
 > head set 90
@@ -162,7 +206,7 @@ HEAD TARGET=90.00
 > telem heading
 HEADING bno=1 cur=42.30 hold=1 tgt=90.00 err=47.70
 > telem all
-ALL mode=AIR armed=1 hold=1 bno=1 fsHold=0 yawUs=1496 thrUs=1502 nUs=1000 aUs=1900 hUs=1010 yaw=0 thr=0 cmdL=0 cmdR=0 usL=1500 usR=1500 curH=42.3 tgtH=90.0 errH=47.7
+ALL mode=HDG armed=1 hold=1 bno=1 fsHold=0 yawUs=1496 thrUs=1502 nUs=1000 aUs=1900 hUs=1010 yaw=0 thr=0 cmdL=0 cmdR=0 usL=1500 usR=1500 curH=42.3 tgtH=90.0 errH=47.7
 ```
 
 ## Implementation Notes
@@ -178,4 +222,4 @@ Potential future command groups: `CAL` (calibration), `LOG`, `PROFILE` (paramete
 
 ---
 
-KC1 Serial API v1 (updated)
+KC1 Serial API v2 - Updated for firmware 0.4.0.0 with parameter schema validation and JSON export
