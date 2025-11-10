@@ -945,6 +945,8 @@ static void cmdHelp()
 	Serial.println(F("  HEAD OFF - disable heading hold"));
 	Serial.println(F("  HEAD SET <deg> - set target to value"));
 	Serial.println(F("  HEAD TARGET - report current target"));
+	Serial.println(F("  TEST CONFIG - basic ConfigStore functionality test"));
+	Serial.println(F("  TEST SETDEBUG <name> <val> - detailed CFG SET debug"));
 	Serial.println(F("  RESET - disarm and neutral outputs"));
 }
 
@@ -1507,6 +1509,122 @@ static void processLine(char *line)
 			return;
 		}
 		replyErr(F("bad HEAD sub"));
+		return;
+	}
+	if (icmp(tok, "TEST") == 0)
+	{
+		char *sub = nextToken(cursor);
+		if (!sub)
+		{
+			replyErr(F("TEST missing sub"));
+			return;
+		}
+		if (icmp(sub, "CONFIG") == 0)
+		{
+			// Basic ConfigStore functionality test
+			Serial.println(F("=== ConfigStore Test ==="));
+			Serial.print(F("Parameter count: "));
+			Serial.println(ConfigStore::count());
+
+			// Test a simple get/set cycle
+			const char *testParam = "dead_center";
+			float originalVal, newVal, verifyVal;
+
+			if (!ConfigStore::get(testParam, originalVal))
+			{
+				Serial.println(F("ERROR: Cannot get test parameter"));
+				return;
+			}
+
+			Serial.print(F("Original value: "));
+			Serial.println(originalVal, 4);
+
+			newVal = originalVal + 5.0f; // Small change
+			Serial.print(F("Setting to: "));
+			Serial.println(newVal, 4);
+
+			bool setResult = ConfigStore::set(testParam, newVal);
+			Serial.print(F("Set result: "));
+			Serial.println(setResult ? F("SUCCESS") : F("FAILED"));
+
+			if (ConfigStore::get(testParam, verifyVal))
+			{
+				Serial.print(F("Verified value: "));
+				Serial.println(verifyVal, 4);
+				Serial.print(F("Change detected: "));
+				Serial.println((abs(verifyVal - originalVal) > 0.1f) ? F("YES") : F("NO"));
+			}
+
+			// Restore original
+			ConfigStore::set(testParam, originalVal);
+			Serial.println(F("=== Test Complete ==="));
+			return;
+		}
+		if (icmp(sub, "SETDEBUG") == 0)
+		{
+			char *pname = nextToken(cursor);
+			char *pval = nextToken(cursor);
+			if (!pname || !pval)
+			{
+				replyErr(F("usage TEST SETDEBUG <name> <val>"));
+				return;
+			}
+
+			Serial.print(F("=== DEBUG SET "));
+			Serial.print(pname);
+			Serial.print(F(" "));
+			Serial.print(pval);
+			Serial.println(F(" ==="));
+
+			// Check if parameter exists
+			float currentVal;
+			if (!ConfigStore::get(pname, currentVal))
+			{
+				Serial.println(F("ERROR: Parameter not found"));
+				return;
+			}
+
+			Serial.print(F("Current: "));
+			Serial.println(currentVal, 4);
+
+			// Show metadata if available
+			Serial.println(F("Metadata:"));
+			if (!ConfigStore::metaOne(Serial, pname))
+			{
+				Serial.println(F("  No metadata"));
+			}
+
+			// Parse and attempt set
+			char *endp = nullptr;
+			double nv = strtod(pval, &endp);
+			if (endp == pval || (*endp != 0))
+			{
+				Serial.println(F("ERROR: Invalid number"));
+				return;
+			}
+
+			Serial.print(F("Parsed value: "));
+			Serial.println((float)nv, 4);
+
+			bool result = ConfigStore::set(pname, (float)nv);
+			Serial.print(F("Set returned: "));
+			Serial.println(result ? F("true") : F("false"));
+
+			// Check final value
+			float finalVal;
+			if (ConfigStore::get(pname, finalVal))
+			{
+				Serial.print(F("Final: "));
+				Serial.println(finalVal, 4);
+				if (result && abs(finalVal - (float)nv) > 0.001f)
+				{
+					Serial.println(F("WARNING: Value was clamped/adjusted"));
+				}
+			}
+			Serial.println(F("=== Debug Complete ==="));
+			return;
+		}
+		replyErr(F("bad TEST sub"));
 		return;
 	}
 	if (icmp(tok, "RESET") == 0)
