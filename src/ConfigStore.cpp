@@ -29,6 +29,9 @@
 #ifndef HEADHOLD_ENABLED
 #define HEADHOLD_ENABLED 1
 #endif
+#ifndef COMPASS_CORRECTION_DEG
+#define COMPASS_CORRECTION_DEG 0
+#endif
 #ifndef HEADING_DEADBAND_DEG
 #define HEADING_DEADBAND_DEG 5.0f
 #endif
@@ -129,7 +132,8 @@ const ConfigStore::ConfigData ConfigStore::_defaults = {
 	(uint16_t)MOTOR_START_US_R,
 	(float)MOTOR_SCALE_L,
 	(float)MOTOR_SCALE_R,
-	(uint16_t)MOTOR_START_REGION};
+	(uint16_t)MOTOR_START_REGION,
+	(int16_t)COMPASS_CORRECTION_DEG};
 bool ConfigStore::_dirty = false;
 
 // PROGMEM names
@@ -138,6 +142,7 @@ static const char n_reverseRight[] PROGMEM = "reverse_right";
 static const char n_motorExpoL[] PROGMEM = "motor_expo_l";
 static const char n_motorExpoR[] PROGMEM = "motor_expo_r";
 static const char n_headingHoldEn[] PROGMEM = "heading_hold_en";
+static const char n_compassCorrectionDeg[] PROGMEM = "compass_correction_deg";
 static const char n_headingDeadband[] PROGMEM = "heading_deadband_deg";
 static const char n_headKp[] PROGMEM = "head_kp";
 static const char n_headKi[] PROGMEM = "head_ki";
@@ -193,13 +198,14 @@ ConfigStore::ConfigStore::Entry *ConfigStore::table()
 		{(const __FlashStringHelper *)n_motorScaleL, PT_FLOAT, &_data.motorScaleL, &_defaults.motorScaleL},
 		{(const __FlashStringHelper *)n_motorScaleR, PT_FLOAT, &_data.motorScaleR, &_defaults.motorScaleR},
 		{(const __FlashStringHelper *)n_motorStartRegion, PT_U16, &_data.motorStartRegion, &_defaults.motorStartRegion},
+		{(const __FlashStringHelper *)n_compassCorrectionDeg, PT_I16, &_data.compassCorrectionDeg, &_defaults.compassCorrectionDeg},
 	};
 	return entries;
 }
 
 size_t ConfigStore::tableSize()
 {
-	return 28; // keep in sync with entries above
+	return 29; // keep in sync with entries above
 }
 
 // ---------------- Metadata (schema) ----------------
@@ -212,6 +218,7 @@ static const char u_us[] PROGMEM = "us";
 static const char d_rev[] PROGMEM = "Invert motor direction";
 static const char d_expo[] PROGMEM = "Output expo 0..1000";
 static const char d_hold[] PROGMEM = "Enable heading hold";
+static const char d_compass_corr[] PROGMEM = "Compass mounting correction";
 static const char d_hdb[] PROGMEM = "Heading deadband";
 static const char d_pid[] PROGMEM = "Heading PID gain";
 static const char d_cmdmax[] PROGMEM = "Max yaw cmd";
@@ -261,6 +268,7 @@ static const ConfigStore::Meta kMeta[] = {
 	{(const __FlashStringHelper *)n_motorScaleL, ConfigStore::PT_FLOAT, 0.5f, 1.5f, 0.01f, (const __FlashStringHelper *)u_none, (const __FlashStringHelper *)d_mscale},
 	{(const __FlashStringHelper *)n_motorScaleR, ConfigStore::PT_FLOAT, 0.5f, 1.5f, 0.01f, (const __FlashStringHelper *)u_none, (const __FlashStringHelper *)d_mscale},
 	{(const __FlashStringHelper *)n_motorStartRegion, ConfigStore::PT_U16, 0, 400, 1, (const __FlashStringHelper *)u_none, (const __FlashStringHelper *)d_mregion},
+	{(const __FlashStringHelper *)n_compassCorrectionDeg, ConfigStore::PT_I16, 0, 359, 1, (const __FlashStringHelper *)u_deg, (const __FlashStringHelper *)d_compass_corr},
 };
 
 const ConfigStore::Meta *ConfigStore::metaTable() { return kMeta; }
@@ -307,7 +315,7 @@ ConfigStore::Entry *ConfigStore::find(const char *name)
 
 // EEPROM layout: [0..3] signature 'K','C','1','C'  [4] version  [5..] ConfigData binary
 static const uint8_t CFG_SIGNATURE[4] = {'K', 'C', '1', 'C'};
-static const uint8_t CFG_VERSION = 4; // bumped due to added motor_start_region parameter
+static const uint8_t CFG_VERSION = 4; // No bump needed - compass_correction_deg added at end (binary compatible)
 
 void ConfigStore::begin()
 {

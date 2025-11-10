@@ -6,7 +6,7 @@
 
 > **Android App:** An Android companion app is available that allows you to monitor the controller status, configure parameters on the fly, and control the kayak directly from your phone. Link will be added later.
 
-API Version: **0.4.0.0**
+API Version: **0.4.2.0**
 
 Differential‑thrust kayak controller with Normal, Air, and dedicated Heading (compass) modes, runtime serial configuration/telemetry API, and safety‑first arming & failsafe behaviors.
 
@@ -248,6 +248,13 @@ KC1 now uses a 4-part semantic version: MAJOR.MINOR.PATCH.HOTFIX
 Example progression: 0.3.1.0 (small enhancement) → 0.3.2.0 (another minor feature) → 0.3.2.1 (hotfix) → 0.4.0.0 (larger feature set) → 1.0.0.0 (stable milestone / external interface freeze candidate).
 
 ## CHANGELOG (abridged)
+
+### 0.4.2.0
+
+- Added `compass_correction_deg` parameter (0..359) to correct for BNO055 mounting orientation.
+- Compass correction is automatically applied to all heading readings and target heading when entering heading hold mode.
+- Added `TEST CONFIG` and `TEST SETDEBUG` commands for ConfigStore debugging.
+- **EEPROM Compatible**: New parameter added at end of structure, existing settings preserved on upgrade.
 
 ### 0.4.0.0
 

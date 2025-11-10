@@ -40,7 +40,7 @@
 #define KC1_VER_MINOR 4
 #endif
 #ifndef KC1_VER_PATCH
-#define KC1_VER_PATCH 1
+#define KC1_VER_PATCH 2
 #endif
 #ifndef KC1_VER_HOTFIX
 #define KC1_VER_HOTFIX 0
@@ -379,6 +379,8 @@ static bool readHeadingDeg(float &headingOut)
 	float h = euler.x();
 	if (isnan(h))
 		return false;
+	// Apply compass mounting correction
+	h += (float)ConfigStore::compassCorrectionDeg();
 	headingOut = normalizeAngleDeg(h);
 	return true;
 }

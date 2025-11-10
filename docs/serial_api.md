@@ -69,6 +69,7 @@ Names correspond exactly to internal storage fields (snake_case). All parameters
 | motor_expo_l            | U16  | 0    | 1000   | 1    | 400     | Expo shaping left motor (0 linear)                     |
 | motor_expo_r            | U16  | 0    | 1000   | 1    | 400     | Expo shaping right motor                               |
 | heading_hold_en         | U8   | 0    | 1      | 1    | 1       | Master enable for heading hold feature                 |
+| compass_correction_deg  | I16  | 0    | 359    | 1    | 0       | Compass mounting correction in degrees                 |
 | heading_deadband_deg    | F32  | 0.0  | 30.0   | 0.1  | 5.0     | Error band disabling corrections / bleeding integrator |
 | head_kp                 | F32  | 0.0  | 10.0   | 0.05 | 3.5     | Proportional gain deg -> command units                 |
 | head_ki                 | F32  | 0.0  | 2.0    | 0.01 | 0.05    | Integral gain deg\*s -> command                        |

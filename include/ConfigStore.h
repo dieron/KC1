@@ -105,38 +105,41 @@ public:
 	static float motorScaleR() { return _data.motorScaleR; }
 	// Command-domain magnitude threshold under which start offset is applied
 	static uint16_t motorStartRegion() { return _data.motorStartRegion; }
+	// Compass mounting correction in degrees (0..359). Added to raw BNO055 reading to correct for physical orientation.
+	static int16_t compassCorrectionDeg() { return _data.compassCorrectionDeg; }
 
 private:
 	struct ConfigData
 	{
-		uint8_t reverseLeft;		// 0/1 invert left motor direction
-		uint8_t reverseRight;		// 0/1 invert right motor direction
-		uint16_t motorExpoL;		// 0..1000 expo for left motor output shaping
-		uint16_t motorExpoR;		// 0..1000 expo for right motor output shaping
-		uint8_t headingHoldEnabled; // 0 disable feature at runtime, 1 allow activation via CH5
-		float headingDeadbandDeg;	// deg threshold where corrections halt & integrator decays
-		float headKp;				// proportional gain (deg -> command units)
-		float headKi;				// integral gain (deg*s -> command units)
-		float headKd;				// derivative gain (deg/s -> command units)
-		float headCmdMax;			// max absolute yaw command emitted by PID
-		uint16_t speedZeroThresh;	// avg |cmd| below this treated as stationary for spin logic
-		float speedHighFrac;		// fraction of full output considered high speed (0..1)
-		uint16_t spinCmdMin;		// minimum spin command magnitude when stationary
-		uint16_t spinCmdMax;		// maximum spin command magnitude when stationary
-		uint8_t failsafeStuckThr;	// master enable for stuck-signal heuristic
-		uint16_t stuckDeltaUs;		// max microsecond delta counted as unchanged
-		uint16_t stuckCycles;		// consecutive cycles required to declare stuck
-		int16_t deadCenter;			// stick deadband (+/- command units)
-		uint16_t staleTimeoutMs;	// ms since last edge before channel invalid
-		int16_t airGainPerCycle;	// Air mode setpoint increment at full stick per loop
-		int16_t hdgGainPerCycle;	// Heading mode forward speed increment at full stick per loop
-		float headBoostTriggerMult; // Multiplier of deadband where boost begins (e.g. 2.0)
-		float headMaxBoost;			// Maximum adaptive boost multiplier (>=1.0)
-		uint16_t motorStartUsL;		// Start offset left (µs)
-		uint16_t motorStartUsR;		// Start offset right (µs)
-		float motorScaleL;			// Scale factor left
-		float motorScaleR;			// Scale factor right
-		uint16_t motorStartRegion;	// Command magnitude threshold for start offset (e.g. 150)
+		uint8_t reverseLeft;		  // 0/1 invert left motor direction
+		uint8_t reverseRight;		  // 0/1 invert right motor direction
+		uint16_t motorExpoL;		  // 0..1000 expo for left motor output shaping
+		uint16_t motorExpoR;		  // 0..1000 expo for right motor output shaping
+		uint8_t headingHoldEnabled;	  // 0 disable feature at runtime, 1 allow activation via CH5
+		float headingDeadbandDeg;	  // deg threshold where corrections halt & integrator decays
+		float headKp;				  // proportional gain (deg -> command units)
+		float headKi;				  // integral gain (deg*s -> command units)
+		float headKd;				  // derivative gain (deg/s -> command units)
+		float headCmdMax;			  // max absolute yaw command emitted by PID
+		uint16_t speedZeroThresh;	  // avg |cmd| below this treated as stationary for spin logic
+		float speedHighFrac;		  // fraction of full output considered high speed (0..1)
+		uint16_t spinCmdMin;		  // minimum spin command magnitude when stationary
+		uint16_t spinCmdMax;		  // maximum spin command magnitude when stationary
+		uint8_t failsafeStuckThr;	  // master enable for stuck-signal heuristic
+		uint16_t stuckDeltaUs;		  // max microsecond delta counted as unchanged
+		uint16_t stuckCycles;		  // consecutive cycles required to declare stuck
+		int16_t deadCenter;			  // stick deadband (+/- command units)
+		uint16_t staleTimeoutMs;	  // ms since last edge before channel invalid
+		int16_t airGainPerCycle;	  // Air mode setpoint increment at full stick per loop
+		int16_t hdgGainPerCycle;	  // Heading mode forward speed increment at full stick per loop
+		float headBoostTriggerMult;	  // Multiplier of deadband where boost begins (e.g. 2.0)
+		float headMaxBoost;			  // Maximum adaptive boost multiplier (>=1.0)
+		uint16_t motorStartUsL;		  // Start offset left (µs)
+		uint16_t motorStartUsR;		  // Start offset right (µs)
+		float motorScaleL;			  // Scale factor left
+		float motorScaleR;			  // Scale factor right
+		uint16_t motorStartRegion;	  // Command magnitude threshold for start offset (e.g. 150)
+		int16_t compassCorrectionDeg; // 0..359 compass mounting correction degrees (ADDED AT END for EEPROM compatibility)
 	};
 	struct Entry
 	{
