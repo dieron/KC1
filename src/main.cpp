@@ -40,7 +40,7 @@
 #define KC1_VER_MINOR 4
 #endif
 #ifndef KC1_VER_PATCH
-#define KC1_VER_PATCH 2
+#define KC1_VER_PATCH 3
 #endif
 #ifndef KC1_VER_HOTFIX
 #define KC1_VER_HOTFIX 0
@@ -326,6 +326,9 @@ static int16_t g_headingModeSpeed = 0; // 0..1000 forward-only speed command whi
 // BNO055 and heading-hold state
 static Adafruit_BNO055 g_bno = Adafruit_BNO055(55, 0x28);
 static bool g_bnoOk = false;
+static uint8_t g_bnoCalibStatus = 0;   // 0-3: uncalibrated to fully calibrated
+static uint32_t g_lastBnoReadMs = 0;   // track last successful read
+static uint16_t g_bnoReadFailures = 0; // consecutive read failures
 static bool g_headingHoldActive = false;
 static float g_headingTargetDeg = 0.0f; // 0..360
 static float g_headErrInt = 0.0f;
@@ -371,14 +374,98 @@ static bool bnoBeginAuto()
 	return false;
 }
 
+static bool bnoConfigureAndCalibrate()
+{
+	if (!g_bnoOk)
+		return false;
+	// Set operation mode to NDOF (Nine Degrees of Freedom)
+	// This uses magnetometer, gyroscope, and accelerometer fusion
+	g_bno.setMode(OPERATION_MODE_NDOF);
+	delay(20); // Mode switch settling time
+	// Use external crystal for better accuracy
+	g_bno.setExtCrystalUse(true);
+	delay(10);
+	return true;
+}
+
+static bool checkBnoCalibration()
+{
+	if (!g_bnoOk)
+		return false;
+	uint8_t sys, gyro, accel, mag;
+	g_bno.getCalibration(&sys, &gyro, &accel, &mag);
+	g_bnoCalibStatus = mag; // Store magnetometer calibration (0-3)
+	// Require at least mag=2 for reliable heading
+	return (mag >= 2);
+}
+
+static bool bnoHealthCheck()
+{
+	if (!g_bnoOk)
+		return false;
+	// Check if sensor is responsive
+	int8_t temp = g_bno.getTemp();
+	if (temp < -40 || temp > 85)
+	{
+		// Likely communication error or sensor offline
+		return false;
+	}
+	return true;
+}
+
 static bool readHeadingDeg(float &headingOut)
 {
 	if (!g_bnoOk)
 		return false;
+
+	// Check calibration periodically (every 5 seconds)
+	static uint32_t lastCalCheck = 0;
+	uint32_t now = millis();
+	if (now - lastCalCheck > 5000)
+	{
+		checkBnoCalibration();
+		lastCalCheck = now;
+	}
+
+	// Get heading from sensor
 	imu::Vector<3> euler = g_bno.getVector(Adafruit_BNO055::VECTOR_EULER);
 	float h = euler.x();
-	if (isnan(h))
+
+	// Validate reading
+	if (isnan(h) || h < 0.0f || h >= 360.0f)
+	{
+		g_bnoReadFailures++;
+		if (g_bnoReadFailures > 50)
+		{
+			// Sensor might be in bad state, attempt recovery
+			g_bnoReadFailures = 0;
+			bnoHealthCheck();
+		}
 		return false;
+	}
+
+	// Check for stale/stuck data (same value for too long)
+	static float lastHeading = -1.0f;
+	static uint32_t lastChangeMs = 0;
+	if (lastHeading >= 0.0f && fabsf(h - lastHeading) < 0.1f)
+	{
+		// Same value - check if stuck for too long (30 seconds while moving)
+		if (now - lastChangeMs > 30000)
+		{
+			// Likely stuck sensor - reject this reading
+			return false;
+		}
+	}
+	else
+	{
+		lastHeading = h;
+		lastChangeMs = now;
+	}
+
+	// Reading is good
+	g_bnoReadFailures = 0;
+	g_lastBnoReadMs = now;
+
 	// Apply compass mounting correction
 	h += (float)ConfigStore::compassCorrectionDeg();
 	headingOut = normalizeAngleDeg(h);
@@ -1315,6 +1402,12 @@ static void processLine(char *line)
 		{
 			Serial.print(F("HEADING bno="));
 			Serial.print(g_bnoOk ? 1 : 0);
+			Serial.print(F(" cal="));
+			Serial.print(g_bnoCalibStatus);
+			Serial.print(F(" fails="));
+			Serial.print(g_bnoReadFailures);
+			Serial.print(F(" lastMs="));
+			Serial.print(g_lastBnoReadMs);
 			float curH;
 			if (g_bnoOk && readHeadingDeg(curH))
 			{
@@ -1700,13 +1793,32 @@ void setup()
 
 	// Initialize BNO055 (always compiled; runtime usage conditioned by headingHoldEnabled())
 	Wire.begin();
+	Wire.setClock(400000); // Use 400kHz I2C for better reliability
 	g_bnoOk = bnoBeginAuto();
 	if (g_bnoOk)
 	{
 #if DEBUG_ENABLED && (DEBUG_STYLE == 0)
 		Serial.println(F("BNO055 OK"));
 #endif
-		g_bno.setExtCrystalUse(true);
+		// Configure operation mode and calibration
+		if (bnoConfigureAndCalibrate())
+		{
+#if DEBUG_ENABLED && (DEBUG_STYLE == 0)
+			Serial.println(F("BNO055 configured for NDOF mode"));
+#endif
+			// Initial calibration check
+			delay(100); // Allow sensor to stabilize
+			checkBnoCalibration();
+#if DEBUG_ENABLED && (DEBUG_STYLE == 0)
+			Serial.print(F("Mag calib: "));
+			Serial.println(g_bnoCalibStatus);
+			if (g_bnoCalibStatus < 2)
+			{
+				Serial.println(F("WARNING: Magnetometer not calibrated!"));
+				Serial.println(F("Move in figure-8 pattern to calibrate."));
+			}
+#endif
+		}
 	}
 	else
 	{

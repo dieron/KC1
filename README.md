@@ -6,7 +6,7 @@
 
 > **Android App:** An Android companion app is available that allows you to monitor the controller status, configure parameters on the fly, and control the kayak directly from your phone. Link will be added later.
 
-API Version: **0.4.2.0**
+API Version: **0.4.3.0**
 
 Differential‑thrust kayak controller with Normal, Air, and dedicated Heading (compass) modes, runtime serial configuration/telemetry API, and safety‑first arming & failsafe behaviors.
 
@@ -248,6 +248,19 @@ KC1 now uses a 4-part semantic version: MAJOR.MINOR.PATCH.HOTFIX
 Example progression: 0.3.1.0 (small enhancement) → 0.3.2.0 (another minor feature) → 0.3.2.1 (hotfix) → 0.4.0.0 (larger feature set) → 1.0.0.0 (stable milestone / external interface freeze candidate).
 
 ## CHANGELOG (abridged)
+
+### 0.4.3.0
+
+- **Major BNO055 Compass Reliability Improvements**:
+  - Set NDOF operation mode explicitly for proper sensor fusion
+  - Added magnetometer calibration status monitoring (requires mag cal ≥2 for reliable heading)
+  - Implemented stale/stuck data detection (rejects readings unchanged for >30s)
+  - Added range validation (0-360°) and NaN checking
+  - Increased I2C clock to 400kHz for better communication reliability
+  - Added sensor health checking with automatic error recovery
+  - Enhanced `TELEM HEADING` with calibration status, failure count, and timestamp
+  - Added startup calibration guidance messages
+- Fixes erratic compass behavior caused by uncalibrated magnetometer and missing operation mode configuration.
 
 ### 0.4.2.0
 

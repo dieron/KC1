@@ -155,10 +155,16 @@ MOTORS cmdL=<int> cmdR=<int> usL=<int> usR=<int>
 ### TELEM HEADING
 
 ```
-HEADING bno=<0|1> cur=<deg?> hold=<0|1> [tgt=<deg> err=<deg>]
+HEADING bno=<0|1> cal=<0-3> fails=<uint> lastMs=<uint> [cur=<deg>] hold=<0|1> [tgt=<deg> err=<deg>]
 ```
 
-`cur`, `tgt`, `err` only when heading available (`bno=1` and read succeeds). Target/err only when hold active.
+- `bno`: 1 if BNO055 detected, 0 if not found
+- `cal`: Magnetometer calibration status (0=uncalibrated, 1=poor, 2=good, 3=excellent). Requires ≥2 for reliable heading hold.
+- `fails`: Consecutive read failure count (0=healthy, >0 indicates communication issues)
+- `lastMs`: Milliseconds since boot of last successful heading read
+- `cur`: Current corrected heading in degrees (0-360), only when valid reading available
+- `hold`: 1 if heading hold active, 0 if inactive
+- `tgt`, `err`: Target heading and error in degrees, only when hold active
 
 ### TELEM ALL
 
@@ -167,6 +173,8 @@ Combines STATUS, RC, MOTORS, HEADING into one line:
 ```
 ALL mode=<DIS|NRM|AIR|HDG> armed=<0|1> hold=<0|1> bno=<0|1> fsHold=<0|1> yawUs=<us> thrUs=<us> nUs=<us> aUs=<us> hUs=<us> yaw=<-1000..1000> thr=<-1000..1000> cmdL=<int> cmdR=<int> usL=<int> usR=<int> [curH=<deg> [tgtH=<deg> errH=<deg>]]
 ```
+
+**Note**: The compact `ALL` format does not include the new `cal`, `fails`, or `lastMs` fields. Use `TELEM HEADING` for full diagnostic information.
 
 ## Heading Commands
 
@@ -201,11 +209,11 @@ OK head_kp=4.0000
 > head on
 HEAD MODE ON tgt=42.15
 > telem heading
-HEADING bno=1 cur=42.15 hold=1 tgt=42.15 err=0.00
+HEADING bno=1 cal=2 fails=0 lastMs=45320 cur=42.15 hold=1 tgt=42.15 err=0.00
 > head set 90
 HEAD TARGET=90.00
 > telem heading
-HEADING bno=1 cur=42.30 hold=1 tgt=90.00 err=47.70
+HEADING bno=1 cal=2 fails=0 lastMs=47850 cur=42.30 hold=1 tgt=90.00 err=47.70
 > telem all
 ALL mode=HDG armed=1 hold=1 bno=1 fsHold=0 yawUs=1496 thrUs=1502 nUs=1000 aUs=1900 hUs=1010 yaw=0 thr=0 cmdL=0 cmdR=0 usL=1500 usR=1500 curH=42.3 tgtH=90.0 errH=47.7
 ```
