@@ -140,6 +140,18 @@ STATUS mode=<DIS|NRM|AIR|HDG> armed=<0|1> bno=<0|1> fsHold=<0|1> cmdL=<int> cmdR
 
 Mode values: DIS (disarmed), NRM (normal), AIR (air mode), HDG (heading mode).
 
+**Air Mode (AIR) Controls:**
+
+- **Cruise mode** (default): Joystick incrementally adjusts latched speed/yaw setpoints
+- **Click Air button**: Toggles manual override—joystick acts as **offset** from cruise (centered=maintain, deflection=temporary adjustment)
+- Click again to resume cruise at the original setpoints
+
+**Heading Mode (HDG) Controls:**
+
+- **Throttle**: Incrementally adjusts forward cruise speed (center=hold, forward=accelerate, back=decelerate)
+- **Yaw <80%**: Ignored—PID handles all yaw corrections automatically
+- **Yaw >80%**: Manually adjusts target heading by 3° per trigger (immediate + every 1s while held). Right=clockwise, Left=counter-clockwise.
+
 ### TELEM RC
 
 ```

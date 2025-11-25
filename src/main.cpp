@@ -318,6 +318,7 @@ static bool g_armed = false;
 static int16_t g_airYawSet = 0;			 // -1000..1000 (latched)
 static int16_t g_airThrSet = 0;			 // -1000..1000 (latched)
 static bool g_skipAirUpdateOnce = false; // when true, skip one Air update to enforce neutral immediately
+static bool g_airManualOverride = false; // when true, Air mode uses direct joystick instead of latched setpoints
 static bool g_holdFailsafe = false;		 // constant-signal heuristic: hold motors neutral without disarming
 // Heading mode specific state
 static int16_t g_headingModeSpeed = 0; // 0..1000 forward-only speed command while in MODE_HEADING
@@ -1129,6 +1130,7 @@ static void disarm()
 	g_mode = MODE_DISARMED;
 	g_airYawSet = 0;
 	g_airThrSet = 0;
+	g_airManualOverride = false;
 	writeEscOutputsUs(1500, 1500);
 	g_headingHoldActive = false;
 	g_headingModeSpeed = 0;
@@ -1894,12 +1896,13 @@ static void maybeArmOrSwitchMode(const RcInputs &rc)
 	{
 		if (g_mode == MODE_AIR)
 		{
-			// Reset both motors to neutral in Air mode
-			g_airYawSet = 0;
-			g_airThrSet = 0;
-			g_skipAirUpdateOnce = true; // ensure neutral holds for this cycle
+			// Toggle manual override mode (does NOT reset setpoints)
+			g_airManualOverride = !g_airManualOverride;
 #if DEBUG_ENABLED && (DEBUG_STYLE == 0)
-			Serial.println(F("AIR -> NEUTRAL"));
+			if (g_airManualOverride)
+				Serial.println(F("AIR: manual override ON"));
+			else
+				Serial.println(F("AIR: cruise resumed"));
 #endif
 		}
 		else
@@ -1910,6 +1913,7 @@ static void maybeArmOrSwitchMode(const RcInputs &rc)
 				g_headingModeSpeed = 0;
 			}
 			g_mode = MODE_AIR;
+			g_airManualOverride = false; // Start in cruise mode
 			// Initialize setpoints from current commands to avoid jump
 			g_airYawSet = rc.yaw;
 			g_airThrSet = rc.thr;
@@ -2056,17 +2060,38 @@ void loop()
 			}
 			case MODE_AIR:
 			{
-				// Update setpoints incrementally from stick deflection
-				if (g_skipAirUpdateOnce)
+				// Check if manual override mode is active (toggled by Air button click)
+				if (g_airManualOverride)
 				{
-					// Skip one update so neutral takes effect immediately
-					g_skipAirUpdateOnce = false;
+					// Manual override: add joystick deflection to latched setpoints
+					// This allows temporary adjustments while preserving the cruise baseline
+					int16_t overrideThr = g_airThrSet + rc.thr;
+					int16_t overrideYaw = g_airYawSet + rc.yaw;
+					// Clamp to valid range
+					if (overrideThr > 1000)
+						overrideThr = 1000;
+					if (overrideThr < -1000)
+						overrideThr = -1000;
+					if (overrideYaw > 1000)
+						overrideYaw = 1000;
+					if (overrideYaw < -1000)
+						overrideYaw = -1000;
+					mixDifferential(overrideThr, overrideYaw, cmdL, cmdR);
 				}
 				else
 				{
-					updateAirSetpoints(rc.thr, rc.yaw);
+					// Normal cruise mode: latched setpoints with incremental adjustment
+					if (g_skipAirUpdateOnce)
+					{
+						// Skip one update so neutral takes effect immediately
+						g_skipAirUpdateOnce = false;
+					}
+					else
+					{
+						updateAirSetpoints(rc.thr, rc.yaw);
+					}
+					mixDifferential(g_airThrSet, g_airYawSet, cmdL, cmdR);
 				}
-				mixDifferential(g_airThrSet, g_airYawSet, cmdL, cmdR);
 				break;
 			}
 			case MODE_HEADING:
@@ -2085,6 +2110,51 @@ void loop()
 				g_headingModeSpeed = (int16_t)newSpeed;
 				cmdL = g_headingModeSpeed;
 				cmdR = g_headingModeSpeed;
+
+				// Yaw-based target heading adjustment: when yaw exceeds 80% (800), adjust target
+				// by 3 degrees per trigger (initial + every 1 second held)
+				static uint32_t lastYawAdjustMs = 0;
+				static bool yawWasTriggered = false;
+				const int16_t yawThreshold = 800;		// 80% of 1000
+				const float headingStepDeg = 3.0f;		// degrees per adjustment
+				const uint32_t repeatIntervalMs = 1000; // 1 second repeat rate
+
+				if (abs(rc.yaw) > yawThreshold)
+				{
+					uint32_t now = millis();
+					bool doAdjust = false;
+
+					if (!yawWasTriggered)
+					{
+						// First trigger - immediate adjustment
+						doAdjust = true;
+						yawWasTriggered = true;
+						lastYawAdjustMs = now;
+					}
+					else if (now - lastYawAdjustMs >= repeatIntervalMs)
+					{
+						// Held past repeat interval - another adjustment
+						doAdjust = true;
+						lastYawAdjustMs = now;
+					}
+
+					if (doAdjust)
+					{
+						// Positive yaw = turn right = increase heading
+						// Negative yaw = turn left = decrease heading
+						float delta = (rc.yaw > 0) ? headingStepDeg : -headingStepDeg;
+						g_headingTargetDeg = normalizeAngleDeg(g_headingTargetDeg + delta);
+#if DEBUG_ENABLED && (DEBUG_STYLE == 0)
+						Serial.print(F("HDG TGT ADJ -> "));
+						Serial.println(g_headingTargetDeg, 1);
+#endif
+					}
+				}
+				else
+				{
+					// Yaw below threshold - reset trigger state
+					yawWasTriggered = false;
+				}
 				break;
 			}
 			default:

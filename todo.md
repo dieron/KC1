@@ -35,8 +35,9 @@ Legend:
    Status: NOT  
    Description: Add `ms=<uint32>` (millis) to telemetry (STATUS/ALL) for client-side latency & rate calculations.
 9. Calibration & IMU Status Exposure  
-   Status: NOT  
-   Description: Expose BNO055 calibration/system status (sys,gyr,acc,mag) via `TELEM CAL` or fields in STATUS.
+   Status: PART (2025-11-24)  
+   Description: Expose BNO055 calibration/system status (sys,gyr,acc,mag) via `TELEM CAL` or fields in STATUS.  
+   Notes: Magnetometer calibration (0-3) now exposed via `cal=` field in `TELEM HEADING`. Full sys/gyr/acc calibration values shown in debug output every 10s. Dedicated `TELEM CAL` command pending.
 10. Health & Diagnostics Telemetry  
     Status: NOT  
     Description: Loop time avg/max, RC frame drop count, failsafe reason, EEPROM dirty flag.
@@ -62,8 +63,9 @@ Legend:
     Status: NOT  
     Description: `CFG AUTOSAVE ON|OFF`; `CFG BATCH BEGIN/SET/COMMIT/ABORT` for atomic multi-param updates.
 18. Extended Heading Telemetry Enhancements  
-    Status: NOT  
-    Description: Add PID terms (P,I,D,output) optionally for tuning frames.
+    Status: PART (2025-11-24)  
+    Description: Add PID terms (P,I,D,output) optionally for tuning frames.  
+    Notes: Added `cal=<0-3>` (mag calibration), `fails=<count>` (consecutive read failures), `lastMs=<timestamp>` (last successful read) to `TELEM HEADING`. PID term exposure pending.
 
 ## Protocol & Robustness
 

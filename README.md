@@ -31,11 +31,20 @@ Differential‑thrust kayak controller with Normal, Air, and dedicated Heading (
 | AIR      | CH4 toggle while disarmed or from other armed mode | Toggle CH4 again (neutralize), go NORMAL/HEADING, or DISARM   | Latched setpoints (`air_gain_per_cycle` per loop at full stick) for cruise-like trimming                             |
 | HEADING  | CH5 toggle or `HEAD ON` (armed + BNO055 OK)        | `HEAD OFF` (to NORMAL) or CH3/CH4 to NORMAL/AIR or DISARM     | Holds captured heading with yaw PID; forward speed is incremental cruise adjusted by throttle (`hdg_gain_per_cycle`) |
 
+Air mode particulars:
+
+- **Cruise mode** (default): Joystick incrementally adjusts latched speed/yaw setpoints (`air_gain_per_cycle` per loop at full stick).
+- **Manual override** (click Air button while in Air mode): Joystick acts as **offset** from latched setpoints. Centered joystick = maintain cruise, deflection = temporary adjustment added to cruise values.
+- Click Air button again to return to cruise mode at the previously latched setpoints.
+- Use case: Cruising at 50% throttle, click Air to override, push stick forward to temporarily boost to ~100%, release stick to return to 50%, click Air again to resume normal cruise adjustment.
+
 Heading mode particulars:
 
 - Entering from AIR preserves forward speed using the latched Air throttle setpoint; from NORMAL it derives from current motor outputs.
 - Throttle stick center ≈ hold; forward increases cruise speed; back decreases (never reverses below zero).
-- Yaw stick is ignored for turning—PID provides yaw corrections.
+- Yaw stick behavior:
+  - Below 80%: Ignored—PID provides all yaw corrections automatically.
+  - Above 80%: Adjusts target heading by 3° per activation (immediate on first trigger, then every 1 second while held). Right yaw = increase heading (clockwise), Left yaw = decrease heading (counter-clockwise).
 - Exiting via `HEAD OFF` resets heading speed to zero (NORMAL mode).
 
 ## Runtime Configuration & Persistence
