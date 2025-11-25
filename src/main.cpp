@@ -385,6 +385,18 @@ static bool bnoConfigureAndCalibrate()
 	// Use external crystal for better accuracy
 	g_bno.setExtCrystalUse(true);
 	delay(10);
+
+#if DEBUG_ENABLED && (DEBUG_STYLE == 0)
+	// Verify mode was set correctly
+	uint8_t mode = g_bno.getMode();
+	Serial.print(F("BNO055 mode: "));
+	Serial.println(mode);
+	if (mode != OPERATION_MODE_NDOF)
+	{
+		Serial.println(F("WARNING: Failed to set NDOF mode!"));
+	}
+#endif
+
 	return true;
 }
 
@@ -395,6 +407,24 @@ static bool checkBnoCalibration()
 	uint8_t sys, gyro, accel, mag;
 	g_bno.getCalibration(&sys, &gyro, &accel, &mag);
 	g_bnoCalibStatus = mag; // Store magnetometer calibration (0-3)
+
+#if DEBUG_ENABLED && (DEBUG_STYLE == 0)
+	// Report all calibration values for diagnostics
+	static uint32_t lastCalReport = 0;
+	if (millis() - lastCalReport > 10000)
+	{ // Every 10 seconds
+		Serial.print(F("Cal status - Sys:"));
+		Serial.print(sys);
+		Serial.print(F(" Gyro:"));
+		Serial.print(gyro);
+		Serial.print(F(" Accel:"));
+		Serial.print(accel);
+		Serial.print(F(" Mag:"));
+		Serial.println(mag);
+		lastCalReport = millis();
+	}
+#endif
+
 	// Require at least mag=2 for reliable heading
 	return (mag >= 2);
 }
@@ -442,24 +472,6 @@ static bool readHeadingDeg(float &headingOut)
 			bnoHealthCheck();
 		}
 		return false;
-	}
-
-	// Check for stale/stuck data (same value for too long)
-	static float lastHeading = -1.0f;
-	static uint32_t lastChangeMs = 0;
-	if (lastHeading >= 0.0f && fabsf(h - lastHeading) < 0.1f)
-	{
-		// Same value - check if stuck for too long (30 seconds while moving)
-		if (now - lastChangeMs > 30000)
-		{
-			// Likely stuck sensor - reject this reading
-			return false;
-		}
-	}
-	else
-	{
-		lastHeading = h;
-		lastChangeMs = now;
 	}
 
 	// Reading is good
