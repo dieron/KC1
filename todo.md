@@ -66,90 +66,94 @@ Legend:
     Status: PART (2025-11-24)  
     Description: Add PID terms (P,I,D,output) optionally for tuning frames.  
     Notes: Added `cal=<0-3>` (mag calibration), `fails=<count>` (consecutive read failures), `lastMs=<timestamp>` (last successful read) to `TELEM HEADING`. PID term exposure pending.
+19. BNO055 Calibration Persistence  
+    Status: NOT  
+    Description: Save/restore BNO055 calibration offsets to EEPROM to avoid recalibration on each power cycle.  
+    Notes: Add `CAL SAVE` to store current offsets (22 bytes), auto-restore on boot if available, `CAL CLEAR` to force recalibration. Magnetometer calibration is location-dependent; may need recalibration in new magnetic environments.
 
 ## Protocol & Robustness
 
-19. Protocol Framing & CRC  
+20. Protocol Framing & CRC  
     Status: NOT  
     Description: Optional framed packets with length, type, CRC16, sequence ID; ACK/NACK for critical commands.
-20. Binary Mode Option  
+21. Binary Mode Option  
     Status: NOT  
     Description: Compact binary telemetry/control channel for higher rates (>10 Hz) & reduced parsing overhead.
-21. Sequence Numbers / Replay Protection  
+22. Sequence Numbers / Replay Protection  
     Status: NOT  
     Description: Incrementing sequence in state-changing commands; ignore duplicates.
-22. Reserved Prefix Enforcement  
+23. Reserved Prefix Enforcement  
     Status: NOT  
     Description: Reserve CAL, LOG, PROFILE, etc.; reject misuse with specific `ERR: reserved`.
-23. Noise Immunity Command Prefix  
+24. Noise Immunity Command Prefix  
     Status: NOT  
     Description: Require '!' prefix for state-changing commands in optional strict mode to mitigate stray bytes.
-24. Backspace & Line Editing / Echo Control  
+25. Backspace & Line Editing / Echo Control  
     Status: NOT  
     Description: Support backspace editing & `ECHO ON|OFF` for cleaner machine operation (no prompts when off / streaming).
-25. Authentication / Pairing (Future Wireless)  
+26. Authentication / Pairing (Future Wireless)  
     Status: NOT  
     Description: Simple token or challenge-response gating ARM & control commands.
 
 ## Safety & Reliability
 
-26. Two-Level Arming Interlock  
+27. Two-Level Arming Interlock  
     Status: NOT  
     Description: Requires sequential ARM REQ / ARM CONFIRM with timeout window.
-27. Emergency Stop (EMSTOP)  
+28. Emergency Stop (EMSTOP)  
     Status: NOT  
     Description: Immediate neutral + disarm regardless of state; logs event.
-28. Watchdog Integration & Reset Reason  
+29. Watchdog Integration & Reset Reason  
     Status: NOT  
     Description: Enable AVR WDT, store last reset cause, expose via STATUS / LOG.
-29. Brownout / Voltage Failsafe  
+30. Brownout / Voltage Failsafe  
     Status: NOT  
     Description: If Vbat below threshold, disarm or limit outputs; advertise warning flag.
-30. Unified Failsafe State Machine Refactor  
+31. Unified Failsafe State Machine Refactor  
     Status: NOT  
     Description: Consolidate stale RC, stuck, link-loss into one coherent state machine & transitions.
 
 ## Build / Identity / Maintenance
 
-31. Firmware Build ID / Git Hash  
+32. Firmware Build ID / Git Hash  
     Status: DONE (2025-10-02)  
     Description: Implemented. Git short hash injected at build via extra script; `VERSION` prints `api`, `git`, and `build` date/time.
-32. Baud Rate / Throughput Strategy  
+33. Baud Rate / Throughput Strategy  
     Status: NOT  
     Description: Option to switch to 230400 (or configurable) & guidance for app selection.
-33. Binary Logging Hooks (Future)  
+34. Binary Logging Hooks (Future)  
     Status: NOT  
     Description: Internal buffer and optional dump for high-rate tuning (not a priority now).
 
 ## Misc & Enhancements
 
-34. PID Live Tuning Aids  
+35. PID Live Tuning Aids  
     Status: NOT  
     Description: On-demand streaming of PID intermediate terms for heading tuning.
-35. Structured Error Codes  
+36. Structured Error Codes  
     Status: NOT  
     Description: Enumerated numeric error codes alongside textual reason (machine friendly).
-36. Rate Limiting for Command Flood  
+37. Rate Limiting for Command Flood  
     Status: NOT  
     Description: Throttle high-frequency non-stream commands (e.g. >20 Hz) to protect loop time.
-37. Config Validation Layer  
+38. Config Validation Layer  
     Status: NOT  
     Description: Reject obviously unsafe combos (e.g. spin_cmd_min > spin_cmd_max) with clear errors.
-38. Safe Defaults Snapshot / Profile Sets  
+39. Safe Defaults Snapshot / Profile Sets  
     Status: NOT  
     Description: Multiple stored config profiles (PROFILE SAVE/LOAD <id>).
-39. Documentation Auto-Export  
+40. Documentation Auto-Export  
     Status: NOT  
     Description: Command to emit machine-readable JSON of parameters & features for app onboarding.
-40. Telemetry Compression (Optional)  
+41. Telemetry Compression (Optional)  
     Status: NOT  
     Description: Simple delta or key omission when unchanged in streaming mode.
 
-41. Per-Motor Trim / Symmetric Start Threshold & Scaling  
+42. Per-Motor Trim / Symmetric Start Threshold & Scaling  
     Status: DONE (2025-10-02)  
     Description: IMPLEMENTED. Parameters added: `motor_start_us_l`, `motor_start_us_r`, `motor_scale_l`, `motor_scale_r`, `motor_start_region` with EEPROM persistence and README calibration guidance. Applied after expo + reversal, before PWM mapping. Telemetry values (RC, setpoints) remain unmodified; only final motor commands reflect correction. Initial completion bumped version to 0.3.0; project later progressed to 0.4.0.0 under the 4-part scheme.
 
-42. ConfigStore Parameter Schema & Constraints  
+43. ConfigStore Parameter Schema & Constraints  
     Status: DONE (2025-10-03)  
     Description: IMPLEMENTED. Per-parameter schema (min, max, step, units, description, default) added. `CFG SET` now clamps to bounds and snaps to step. API exposes schema via `CFG META <name>`, `CFG META ALL`, and `CFG META JSON` (array of objects) for app settings UIs. (Related: #16 DONE; #37 cross-parameter validation pending.)
 
