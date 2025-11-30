@@ -13,7 +13,7 @@ Add a new mode (`MODE_EXT`) where motor throttle values are set directly via API
 
 ## Safety
 
-**Automatic failsafe**: Motors stop if no `EXT` command received within timeout (default 500ms).
+**Automatic failsafe**: Motors stop if no `EXT` command received within timeout (5 seconds).
 
 ---
 
@@ -55,11 +55,11 @@ Or simply: First `EXT` command auto-enters EXT mode, timeout auto-exits.
 3. Reset watchdog timer
 4. Apply values through existing motor output logic (expo, scaling, etc.)
 
-### On watchdog timeout (no EXT command for 500ms):
+### On watchdog timeout (no EXT command for 5 seconds):
 
 1. Set both motors to 0
-2. Optionally: remain in EXT mode waiting for next command
-3. After extended timeout (5s): switch to DISARMED
+2. Remain in EXT mode waiting for next command
+3. Use RESET command to disarm and exit
 
 ### On RC button press:
 
@@ -100,7 +100,7 @@ if (icmp(cmd, "EXT") == 0) {
 ```cpp
 case MODE_EXT: {
     // Check watchdog
-    if (millis() - g_lastExtCmdMs > 500) {
+    if (millis() - g_lastExtCmdMs > 5000) {
         g_extMotorL = 0;
         g_extMotorR = 0;
     }
@@ -117,9 +117,11 @@ case MODE_EXT: {
 
 ## Configuration Parameters
 
-| Parameter         | Type | Default | Description                |
-| ----------------- | ---- | ------- | -------------------------- |
-| `ext_watchdog_ms` | U16  | 500     | Timeout before motors stop |
+| Parameter   | Type  | Default | Description                |
+| ----------- | ----- | ------- | -------------------------- |
+| (hardcoded) | const | 5000    | Timeout before motors stop |
+
+Note: Watchdog timeout is currently a compile-time constant (`EXT_WATCHDOG_MS = 5000`).
 
 ---
 
@@ -141,7 +143,7 @@ OK
 > EXT 0.5 0.4
 OK
 
-# (phone stops sending for 500ms)
+# (phone stops sending for 5 seconds)
 # Motors automatically go to 0
 
 > EXT 0 0
@@ -157,19 +159,19 @@ OK
 
 1. Connect via Bluetooth
 2. Virtual joystick maps to L/R motor values
-3. Send `EXT <L> <R>` every 100-200ms while joystick held
+3. Send `EXT <L> <R>` every 500ms-1s while joystick active
 4. On joystick release, send `EXT 0 0`
-5. Watchdog handles connection loss automatically
+5. Watchdog (5s) handles connection loss automatically
 
 ---
 
 ## Implementation Checklist
 
-- [ ] Add MODE_EXT to mode enum
-- [ ] Add g_extMotorL, g_extMotorR, g_lastExtCmdMs globals
-- [ ] Implement EXT command parser
-- [ ] Add MODE_EXT case in loop()
-- [ ] Add watchdog timeout logic
-- [ ] Add ext_watchdog_ms config parameter
-- [ ] Update TELEM STATUS to show EXT mode
-- [ ] Update documentation
+- [x] Add MODE_EXT to mode enum
+- [x] Add g_extMotorL, g_extMotorR, g_lastExtCmdMs globals
+- [x] Implement EXT command parser
+- [x] Add MODE_EXT case in loop()
+- [x] Add watchdog timeout logic
+- [x] Update TELEM STATUS to show EXT mode
+- [x] Update documentation
+- [ ] Add ext_watchdog_ms config parameter (currently hardcoded)

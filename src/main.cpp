@@ -284,7 +284,8 @@ enum Mode : uint8_t
 	MODE_DISARMED = 0,
 	MODE_NORMAL = 1,
 	MODE_AIR = 2,
-	MODE_HEADING = 3
+	MODE_HEADING = 3,
+	MODE_EXT = 4
 };
 
 struct RcInputs
@@ -312,6 +313,12 @@ static bool g_airManualOverride = false; // when true, Air mode uses direct joys
 static bool g_holdFailsafe = false;		 // constant-signal heuristic: hold motors neutral without disarming
 // Heading mode specific state
 static int16_t g_headingModeSpeed = 0; // 0..1000 forward-only speed command while in MODE_HEADING
+
+// EXT mode state (API-controlled motors)
+static int16_t g_extMotorL = 0;				  // -1000..1000 (scaled from -1.0..1.0)
+static int16_t g_extMotorR = 0;				  // -1000..1000 (scaled from -1.0..1.0)
+static uint32_t g_lastExtCmdMs = 0;			  // Last EXT command timestamp for watchdog
+static const uint16_t EXT_WATCHDOG_MS = 5000; // Timeout before motors go to 0
 
 // Heading-hold state (always compiled)
 // BNO055 and heading-hold state
@@ -1043,6 +1050,7 @@ static void cmdHelp()
 	Serial.println(F("  HEAD SET <deg> - set target to value"));
 	Serial.println(F("  HEAD TARGET - report current target"));
 	Serial.println(F("  HEAD RESET - force compass sensor reset"));
+	Serial.println(F("  EXT <L> <R> - API motor control (-1..1)"));
 	Serial.println(F("  RESET - disarm and neutral outputs"));
 }
 
@@ -1258,6 +1266,9 @@ static void processLine(char *line)
 				case MODE_HEADING:
 					Serial.print(F("HDG"));
 					break;
+				case MODE_EXT:
+					Serial.print(F("EXT"));
+					break;
 				default:
 					Serial.print(F("?"));
 					break;
@@ -1356,6 +1367,9 @@ static void processLine(char *line)
 				break;
 			case MODE_HEADING:
 				Serial.print(F("HDG"));
+				break;
+			case MODE_EXT:
+				Serial.print(F("EXT"));
 				break;
 			default:
 				Serial.print(F("?"));
@@ -1466,6 +1480,9 @@ static void processLine(char *line)
 				break;
 			case MODE_HEADING:
 				Serial.print(F("HDG"));
+				break;
+			case MODE_EXT:
+				Serial.print(F("EXT"));
 				break;
 			default:
 				Serial.print(F("?"));
@@ -1647,6 +1664,52 @@ static void processLine(char *line)
 			return;
 		}
 		replyErr(F("bad HEAD sub"));
+		return;
+	}
+	if (icmp(tok, "EXT") == 0)
+	{
+		// EXT <left> <right> - set motor values directly (-1.0 to 1.0)
+		char *leftTok = nextToken(cursor);
+		char *rightTok = nextToken(cursor);
+		if (!leftTok || !rightTok)
+		{
+			replyErr(F("usage EXT <L> <R>"));
+			return;
+		}
+		char *endp = nullptr;
+		float leftF = strtod(leftTok, &endp);
+		if (endp == leftTok || *endp != 0)
+		{
+			replyErr(F("bad left"));
+			return;
+		}
+		endp = nullptr;
+		float rightF = strtod(rightTok, &endp);
+		if (endp == rightTok || *endp != 0)
+		{
+			replyErr(F("bad right"));
+			return;
+		}
+		// Clamp to -1.0 .. 1.0
+		if (leftF < -1.0f)
+			leftF = -1.0f;
+		if (leftF > 1.0f)
+			leftF = 1.0f;
+		if (rightF < -1.0f)
+			rightF = -1.0f;
+		if (rightF > 1.0f)
+			rightF = 1.0f;
+		// Convert to -1000..1000 command domain
+		g_extMotorL = (int16_t)(leftF * 1000.0f);
+		g_extMotorR = (int16_t)(rightF * 1000.0f);
+		g_lastExtCmdMs = millis();
+		// Auto-enter EXT mode if not already
+		if (g_mode != MODE_EXT)
+		{
+			g_mode = MODE_EXT;
+			g_armed = true;
+		}
+		replyOk();
 		return;
 	}
 	if (icmp(tok, "RESET") == 0)
@@ -2067,6 +2130,20 @@ void loop()
 					// Yaw below threshold - reset trigger state
 					yawWasTriggered = false;
 				}
+				break;
+			}
+			case MODE_EXT:
+			{
+				// API-controlled motor mode
+				// Check watchdog - if no EXT command received recently, zero motors
+				if (millis() - g_lastExtCmdMs > EXT_WATCHDOG_MS)
+				{
+					g_extMotorL = 0;
+					g_extMotorR = 0;
+				}
+				// Use stored motor values directly (already in -1000..1000 range)
+				cmdL = g_extMotorL;
+				cmdR = g_extMotorR;
 				break;
 			}
 			default:

@@ -30,6 +30,7 @@ HEAD OFF
 HEAD SET <deg>
 HEAD TARGET
 HEAD RESET
+EXT <left> <right>
 RESET
 ```
 
@@ -137,10 +138,10 @@ All telemetry commands return a single line except `TELEM ALL` (single line aggr
 Format:
 
 ```
-STATUS mode=<DIS|NRM|AIR|HDG> armed=<0|1> bno=<0|1> fsHold=<0|1> cmdL=<int> cmdR=<int> usL=<int> usR=<int>
+STATUS mode=<DIS|NRM|AIR|HDG|EXT> armed=<0|1> bno=<0|1> fsHold=<0|1> cmdL=<int> cmdR=<int> usL=<int> usR=<int>
 ```
 
-Mode values: DIS (disarmed), NRM (normal), AIR (air mode), HDG (heading mode).
+Mode values: DIS (disarmed), NRM (normal), AIR (air mode), HDG (heading mode), EXT (external API control).
 
 **Air Mode (AIR) Controls:**
 
@@ -193,7 +194,7 @@ HEADING bno=<0|1> mode=<NDOF|IMU> sys=<0-3> gyro=<0-3> mag=<0-3> fails=<uint> la
 Combines STATUS, RC, MOTORS, HEADING into one line:
 
 ```
-ALL mode=<DIS|NRM|AIR|HDG> armed=<0|1> hold=<0|1> bno=<0|1> fsHold=<0|1> yawUs=<us> thrUs=<us> nUs=<us> aUs=<us> hUs=<us> yaw=<-1000..1000> thr=<-1000..1000> cmdL=<int> cmdR=<int> usL=<int> usR=<int> [curH=<deg> [tgtH=<deg> errH=<deg>]]
+ALL mode=<DIS|NRM|AIR|HDG|EXT> armed=<0|1> hold=<0|1> bno=<0|1> fsHold=<0|1> yawUs=<us> thrUs=<us> nUs=<us> aUs=<us> hUs=<us> yaw=<-1000..1000> thr=<-1000..1000> cmdL=<int> cmdR=<int> usL=<int> usR=<int> [curH=<deg> [tgtH=<deg> errH=<deg>]]
 ```
 
 **Note**: The compact `ALL` format does not include the new calibration or mode fields. Use `TELEM HEADING` for full diagnostic information.
@@ -213,6 +214,35 @@ Errors:
 - `ERR: feature disabled` when `heading_hold_en=0`
 - `ERR: no heading` when IMU read fails
 - `ERR: bad number` when SET argument invalid
+
+## EXT Commands (API Motor Control)
+
+| Command            | Effect                                                                        |
+| ------------------ | ----------------------------------------------------------------------------- |
+| EXT <left> <right> | Set motor values directly (-1.0 to 1.0 floats); auto-arms and enters EXT mode |
+
+The `EXT` command provides direct API control of motor outputs, useful for phone/Bluetooth control.
+
+**Behavior:**
+
+- Values are clamped to -1.0 to 1.0 range
+- First `EXT` command auto-arms and enters `MODE_EXT`
+- A 5-second watchdog zeros motors if no `EXT` command received
+- Use `RESET` to disarm and exit EXT mode
+- RC button presses can also exit EXT mode
+
+**Examples:**
+
+```
+> EXT 0.5 0.5
+OK                    # Both motors forward 50%
+> EXT 0.3 -0.3
+OK                    # Spin right
+> EXT 0 0
+OK                    # Stop motors
+> RESET
+OK                    # Disarm and exit EXT mode
+```
 
 ## RESET Command
 
