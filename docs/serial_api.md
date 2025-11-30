@@ -29,6 +29,7 @@ HEAD ON
 HEAD OFF
 HEAD SET <deg>
 HEAD TARGET
+HEAD RESET
 RESET
 ```
 
@@ -69,6 +70,7 @@ Names correspond exactly to internal storage fields (snake_case). All parameters
 | motor_expo_l            | U16  | 0    | 1000   | 1    | 400     | Expo shaping left motor (0 linear)                     |
 | motor_expo_r            | U16  | 0    | 1000   | 1    | 400     | Expo shaping right motor                               |
 | heading_hold_en         | U8   | 0    | 1      | 1    | 1       | Master enable for heading hold feature                 |
+| heading_mode            | U8   | 0    | 1      | 1    | 0       | 0=NDOF hybrid (gyro+mag), 1=IMUPLUS (gyro-only)        |
 | compass_correction_deg  | I16  | 0    | 359    | 1    | 0       | Compass mounting correction in degrees                 |
 | heading_deadband_deg    | F32  | 0.0  | 30.0   | 0.1  | 5.0     | Error band disabling corrections / bleeding integrator |
 | head_kp                 | F32  | 0.0  | 10.0   | 0.05 | 3.5     | Proportional gain deg -> command units                 |
@@ -167,16 +169,24 @@ MOTORS cmdL=<int> cmdR=<int> usL=<int> usR=<int>
 ### TELEM HEADING
 
 ```
-HEADING bno=<0|1> cal=<0-3> fails=<uint> lastMs=<uint> [cur=<deg>] hold=<0|1> [tgt=<deg> err=<deg>]
+HEADING bno=<0|1> mode=<NDOF|IMU> sys=<0-3> gyro=<0-3> mag=<0-3> fails=<uint> lastMs=<uint> [cur=<deg>] hold=<0|1> [tgt=<deg> err=<deg>]
 ```
 
 - `bno`: 1 if BNO055 detected, 0 if not found
-- `cal`: Magnetometer calibration status (0=uncalibrated, 1=poor, 2=good, 3=excellent). Requires ≥2 for reliable heading hold.
+- `mode`: Current heading mode - `NDOF` (hybrid gyro+mag) or `IMU` (gyro-only)
+- `sys`: System/fusion calibration (0=uncalibrated, 1=low, 2=medium, 3=fully calibrated)
+- `gyro`: Gyroscope calibration (0-3). Critical for both modes.
+- `mag`: Magnetometer calibration (0-3). Used by NDOF mode for drift correction.
 - `fails`: Consecutive read failure count (0=healthy, >0 indicates communication issues)
 - `lastMs`: Milliseconds since boot of last successful heading read
 - `cur`: Current corrected heading in degrees (0-360), only when valid reading available
 - `hold`: 1 if heading hold active, 0 if inactive
 - `tgt`, `err`: Target heading and error in degrees, only when hold active
+
+**Heading Modes** (set via `CFG SET heading_mode <0|1>`):
+
+- **Mode 0 (NDOF)**: Hybrid approach - uses gyro for smooth tracking, periodically corrects drift using magnetometer when conditions are favorable (low rotation, good mag calibration). Best absolute accuracy, resistant to magnetic interference during active use.
+- **Mode 1 (IMUPLUS)**: Gyro-only heading. Immune to magnetic interference but drifts ~1-2°/min. Good for short sessions where you adjust target heading periodically.
 
 ### TELEM ALL
 
@@ -186,7 +196,7 @@ Combines STATUS, RC, MOTORS, HEADING into one line:
 ALL mode=<DIS|NRM|AIR|HDG> armed=<0|1> hold=<0|1> bno=<0|1> fsHold=<0|1> yawUs=<us> thrUs=<us> nUs=<us> aUs=<us> hUs=<us> yaw=<-1000..1000> thr=<-1000..1000> cmdL=<int> cmdR=<int> usL=<int> usR=<int> [curH=<deg> [tgtH=<deg> errH=<deg>]]
 ```
 
-**Note**: The compact `ALL` format does not include the new `cal`, `fails`, or `lastMs` fields. Use `TELEM HEADING` for full diagnostic information.
+**Note**: The compact `ALL` format does not include the new calibration or mode fields. Use `TELEM HEADING` for full diagnostic information.
 
 ## Heading Commands
 
@@ -196,6 +206,7 @@ ALL mode=<DIS|NRM|AIR|HDG> armed=<0|1> hold=<0|1> bno=<0|1> fsHold=<0|1> yawUs=<
 | HEAD OFF       | Disable hold (target retained)                                          |
 | HEAD SET <deg> | Normalize degree (wrap 0–360) and set target (resets integrator)        |
 | HEAD TARGET    | Report current target                                                   |
+| HEAD RESET     | Reinitialize BNO055 sensor (recovery from stuck/communication issues)   |
 
 Errors:
 

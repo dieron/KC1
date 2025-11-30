@@ -107,6 +107,8 @@ public:
 	static uint16_t motorStartRegion() { return _data.motorStartRegion; }
 	// Compass mounting correction in degrees (0..359). Added to raw BNO055 reading to correct for physical orientation.
 	static int16_t compassCorrectionDeg() { return _data.compassCorrectionDeg; }
+	// Heading mode: 0 = NDOF hybrid (mag-corrected gyro), 1 = IMUPLUS (gyro-only, drifts)
+	static uint8_t headingMode() { return _data.headingMode; }
 
 private:
 	struct ConfigData
@@ -140,6 +142,7 @@ private:
 		float motorScaleR;			  // Scale factor right
 		uint16_t motorStartRegion;	  // Command magnitude threshold for start offset (e.g. 150)
 		int16_t compassCorrectionDeg; // 0..359 compass mounting correction degrees (ADDED AT END for EEPROM compatibility)
+		uint8_t headingMode;		  // 0 = NDOF hybrid (default), 1 = IMUPLUS gyro-only
 	};
 	struct Entry
 	{

@@ -327,14 +327,26 @@ static int16_t g_headingModeSpeed = 0; // 0..1000 forward-only speed command whi
 // BNO055 and heading-hold state
 static Adafruit_BNO055 g_bno = Adafruit_BNO055(55, 0x28);
 static bool g_bnoOk = false;
-static uint8_t g_bnoCalibStatus = 0;   // 0-3: uncalibrated to fully calibrated
-static uint32_t g_lastBnoReadMs = 0;   // track last successful read
-static uint16_t g_bnoReadFailures = 0; // consecutive read failures
+static uint8_t g_bnoCalibStatus = 0;	   // 0-3: magnetometer calibration level
+static uint8_t g_bnoSysStatus = 0;		   // 0-3: system/fusion calibration level
+static uint8_t g_bnoGyroCalib = 0;		   // 0-3: gyroscope calibration level
+static uint32_t g_lastBnoReadMs = 0;	   // track last successful read
+static uint16_t g_bnoReadFailures = 0;	   // consecutive read failures
+static float g_lastValidHeading = 0.0f;	   // last known good heading
+static uint32_t g_lastHeadingChangeMs = 0; // when heading last changed significantly
 static bool g_headingHoldActive = false;
 static float g_headingTargetDeg = 0.0f; // 0..360
 static float g_headErrInt = 0.0f;
 static float g_headPrevErr = 0.0f;
 static uint32_t g_headLastMs = 0;
+
+// Hybrid heading mode (NDOF with our own gyro integration + periodic mag correction)
+static float g_gyroHeadingDeg = 0.0f;	   // Our integrated gyro heading
+static uint32_t g_lastGyroIntegrateMs = 0; // Last time we integrated gyro
+static float g_magReferenceDeg = 0.0f;	   // Last trusted magnetometer reference
+static uint32_t g_lastMagCorrectionMs = 0; // When we last applied mag correction
+static bool g_magReferenceValid = false;   // Whether we have a valid mag reference
+
 // Telemetry: last commanded motor values (signed command domain and microseconds)
 static int16_t g_lastCmdL = 0;
 static int16_t g_lastCmdR = 0;
@@ -375,27 +387,83 @@ static bool bnoBeginAuto()
 	return false;
 }
 
+static bool bnoReset()
+{
+	// Attempt to reset the BNO055 by reinitializing
+	g_bnoOk = false;
+	delay(50);
+
+	if (!bnoBeginAuto())
+		return false;
+
+	// Set operation mode based on heading_mode config
+	// 0 = NDOF (hybrid: we use gyro primary with mag correction when conditions good)
+	// 1 = IMUPLUS (gyro-only, no magnetometer, drifts but immune to magnetic interference)
+	uint8_t headMode = ConfigStore::headingMode();
+	if (headMode == 1)
+	{
+		g_bno.setMode(OPERATION_MODE_IMUPLUS);
+	}
+	else
+	{
+		g_bno.setMode(OPERATION_MODE_NDOF);
+	}
+	delay(25);
+
+	// Use external crystal for timing accuracy
+	g_bno.setExtCrystalUse(true);
+	delay(10);
+
+	g_bnoOk = true;
+	g_bnoReadFailures = 0;
+	g_lastHeadingChangeMs = millis();
+	g_lastGyroIntegrateMs = millis();
+	g_magReferenceValid = false; // Reset mag reference on sensor reset
+
+#if DEBUG_ENABLED && (DEBUG_STYLE == 0)
+	Serial.print(F("BNO055 reset, mode="));
+	Serial.println(headMode == 1 ? F("IMUPLUS") : F("NDOF"));
+#endif
+	return true;
+}
+
 static bool bnoConfigureAndCalibrate()
 {
 	if (!g_bnoOk)
 		return false;
-	// Set operation mode to NDOF (Nine Degrees of Freedom)
-	// This uses magnetometer, gyroscope, and accelerometer fusion
-	g_bno.setMode(OPERATION_MODE_NDOF);
-	delay(20); // Mode switch settling time
-	// Use external crystal for better accuracy
+
+	// Set operation mode based on heading_mode config
+	uint8_t headMode = ConfigStore::headingMode();
+	if (headMode == 1)
+	{
+		// IMUPLUS: gyro + accelerometer fusion only (no magnetometer)
+		// Provides relative orientation, drifts ~1-2°/min
+		g_bno.setMode(OPERATION_MODE_IMUPLUS);
+	}
+	else
+	{
+		// NDOF: full 9-axis fusion (we use our own fusion logic on top)
+		g_bno.setMode(OPERATION_MODE_NDOF);
+	}
+	delay(25); // Mode switch settling time
+
+	// Use external crystal for better timing accuracy
 	g_bno.setExtCrystalUse(true);
 	delay(10);
+
+	// Initialize gyro integration state
+	g_lastGyroIntegrateMs = millis();
+	g_magReferenceValid = false;
 
 #if DEBUG_ENABLED && (DEBUG_STYLE == 0)
 	// Verify mode was set correctly
 	uint8_t mode = g_bno.getMode();
 	Serial.print(F("BNO055 mode: "));
-	Serial.println(mode);
-	if (mode != OPERATION_MODE_NDOF)
-	{
-		Serial.println(F("WARNING: Failed to set NDOF mode!"));
-	}
+	Serial.print(mode);
+	if (headMode == 1)
+		Serial.println(mode == OPERATION_MODE_IMUPLUS ? F(" (IMUPLUS)") : F(" (unexpected!)"));
+	else
+		Serial.println(mode == OPERATION_MODE_NDOF ? F(" (NDOF)") : F(" (unexpected!)"));
 #endif
 
 	return true;
@@ -405,36 +473,40 @@ static bool checkBnoCalibration()
 {
 	if (!g_bnoOk)
 		return false;
+
 	uint8_t sys, gyro, accel, mag;
 	g_bno.getCalibration(&sys, &gyro, &accel, &mag);
 	g_bnoCalibStatus = mag; // Store magnetometer calibration (0-3)
+	g_bnoSysStatus = sys;	// Store system/fusion calibration (0-3)
+	g_bnoGyroCalib = gyro;	// Store gyroscope calibration (0-3)
 
 #if DEBUG_ENABLED && (DEBUG_STYLE == 0)
 	// Report all calibration values for diagnostics
 	static uint32_t lastCalReport = 0;
 	if (millis() - lastCalReport > 10000)
 	{ // Every 10 seconds
-		Serial.print(F("Cal status - Sys:"));
+		Serial.print(F("Cal: S"));
 		Serial.print(sys);
-		Serial.print(F(" Gyro:"));
+		Serial.print(F(" G"));
 		Serial.print(gyro);
-		Serial.print(F(" Accel:"));
+		Serial.print(F(" A"));
 		Serial.print(accel);
-		Serial.print(F(" Mag:"));
+		Serial.print(F(" M"));
 		Serial.println(mag);
 		lastCalReport = millis();
 	}
 #endif
 
-	// Require at least mag=2 for reliable heading
-	return (mag >= 2);
+	// Consider calibrated if system >= 1 and mag >= 1
+	// (less strict than before - NDOF fusion helps even with partial cal)
+	return (sys >= 1 && mag >= 1);
 }
 
 static bool bnoHealthCheck()
 {
 	if (!g_bnoOk)
 		return false;
-	// Check if sensor is responsive
+	// Check if sensor is responsive via temperature read
 	int8_t temp = g_bno.getTemp();
 	if (temp < -40 || temp > 85)
 	{
@@ -444,34 +516,179 @@ static bool bnoHealthCheck()
 	return true;
 }
 
+// Read raw gyro Z rate for our own integration (degrees/second)
+static bool readGyroRateZ(float &rateOut)
+{
+	if (!g_bnoOk)
+		return false;
+	imu::Vector<3> gyro = g_bno.getVector(Adafruit_BNO055::VECTOR_GYROSCOPE);
+	float z = gyro.z(); // degrees/second around Z axis
+	if (isnan(z))
+		return false;
+	rateOut = z;
+	return true;
+}
+
 static bool readHeadingDeg(float &headingOut)
 {
 	if (!g_bnoOk)
 		return false;
 
+	uint32_t now = millis();
+	uint8_t headMode = ConfigStore::headingMode();
+
 	// Check calibration periodically (every 5 seconds)
 	static uint32_t lastCalCheck = 0;
-	uint32_t now = millis();
 	if (now - lastCalCheck > 5000)
 	{
 		checkBnoCalibration();
 		lastCalCheck = now;
 	}
 
-	// Get heading from sensor
-	imu::Vector<3> euler = g_bno.getVector(Adafruit_BNO055::VECTOR_EULER);
-	float h = euler.x();
+	float h = 0.0f;
 
-	// Validate reading
-	if (isnan(h) || h < 0.0f || h >= 360.0f)
+	if (headMode == 1)
 	{
-		g_bnoReadFailures++;
-		if (g_bnoReadFailures > 50)
+		// ===== MODE 1: IMUPLUS (gyro-only) =====
+		// BNO055 in IMUPLUS mode provides relative orientation from gyro+accel fusion
+		// We just read the Euler heading directly - it will drift over time but is
+		// immune to magnetic interference
+		imu::Vector<3> euler = g_bno.getVector(Adafruit_BNO055::VECTOR_EULER);
+		h = euler.x();
+
+		if (isnan(h))
 		{
-			// Sensor might be in bad state, attempt recovery
-			g_bnoReadFailures = 0;
-			bnoHealthCheck();
+			g_bnoReadFailures++;
+			if (g_bnoReadFailures > 20)
+			{
+				bnoReset();
+			}
+			return false;
 		}
+	}
+	else
+	{
+		// ===== MODE 0: NDOF HYBRID (our own gyro integration + periodic mag correction) =====
+		// Use NDOF mode but implement our own fusion:
+		// - Primary: integrate gyro rate for smooth, responsive heading
+		// - Correction: when conditions are good (motors quiet, low rotation), slowly
+		//   blend toward magnetometer heading to prevent drift
+
+		// Get gyro rate for integration
+		float gyroRateZ = 0.0f;
+		bool gyroOk = readGyroRateZ(gyroRateZ);
+
+		// Get NDOF Euler heading (magnetometer-fused)
+		imu::Vector<3> euler = g_bno.getVector(Adafruit_BNO055::VECTOR_EULER);
+		float magHeading = euler.x();
+
+		if (isnan(magHeading))
+		{
+			g_bnoReadFailures++;
+			if (g_bnoReadFailures > 20)
+			{
+				bnoReset();
+			}
+			return false;
+		}
+
+		// Calculate dt for integration
+		uint32_t dtMs = now - g_lastGyroIntegrateMs;
+		if (dtMs > 500)
+			dtMs = 20; // Clamp if too long (first call or stall)
+		float dtSec = dtMs / 1000.0f;
+		g_lastGyroIntegrateMs = now;
+
+		// Integrate gyro rate into our heading
+		if (gyroOk)
+		{
+			g_gyroHeadingDeg += gyroRateZ * dtSec; // Positive: CW rotation increases heading
+			g_gyroHeadingDeg = normalizeAngleDeg(g_gyroHeadingDeg);
+		}
+
+		// Initialize gyro heading from mag on first valid reading
+		if (!g_magReferenceValid && g_bnoCalibStatus >= 1)
+		{
+			g_gyroHeadingDeg = magHeading;
+			g_magReferenceDeg = magHeading;
+			g_magReferenceValid = true;
+			g_lastMagCorrectionMs = now;
+		}
+
+		// Periodic magnetometer correction (when conditions are favorable)
+		// Conditions for applying mag correction:
+		// - Mag calibration >= 2 (reasonable quality)
+		// - Gyro rate is low (device not actively rotating)
+		// - At least 500ms since last correction
+		bool magCalibOk = (g_bnoCalibStatus >= 2);
+		bool lowRotation = (fabsf(gyroRateZ) < 5.0f); // Less than 5 deg/s rotation
+		bool correctionInterval = (now - g_lastMagCorrectionMs > 500);
+
+		if (g_magReferenceValid && magCalibOk && lowRotation && correctionInterval)
+		{
+			// Calculate difference between our gyro heading and magnetometer
+			float magDiff = shortestDiffDeg(magHeading, g_gyroHeadingDeg);
+
+			// Only correct if difference is reasonable (not a wild jump)
+			if (fabsf(magDiff) < 45.0f)
+			{
+				// Blend toward magnetometer: 20% correction per application
+				// More aggressive to quickly correct accumulated gyro drift
+				g_gyroHeadingDeg += magDiff * 0.20f;
+				g_gyroHeadingDeg = normalizeAngleDeg(g_gyroHeadingDeg);
+				g_lastMagCorrectionMs = now;
+
+#if DEBUG_ENABLED && (DEBUG_STYLE == 0)
+				static uint32_t lastMagDebug = 0;
+				if (now - lastMagDebug > 10000)
+				{
+					Serial.print(F("Mag corr: diff="));
+					Serial.print(magDiff, 1);
+					Serial.print(F(" gyro="));
+					Serial.print(g_gyroHeadingDeg, 1);
+					Serial.print(F(" mag="));
+					Serial.println(magHeading, 1);
+					lastMagDebug = now;
+				}
+#endif
+			}
+			else
+			{
+				// Large discrepancy - magnetometer may be disturbed, skip this correction
+#if DEBUG_ENABLED && (DEBUG_STYLE == 0)
+				Serial.print(F("Mag skip: diff="));
+				Serial.println(magDiff, 1);
+#endif
+			}
+		}
+
+		// Use our fused gyro heading
+		h = g_gyroHeadingDeg;
+	}
+
+	// Common processing for both modes
+
+	// Normalize to 0-360 range
+	h = fmod(h, 360.0f);
+	if (h < 0)
+		h += 360.0f;
+
+	// Detect stuck sensor: if heading hasn't changed by more than 0.5° in 60 seconds
+	float diff = fabsf(h - g_lastValidHeading);
+	if (diff > 180.0f)
+		diff = 360.0f - diff; // Handle wrap
+
+	if (diff > 0.5f)
+	{
+		g_lastHeadingChangeMs = now;
+		g_lastValidHeading = h;
+	}
+	else if (now - g_lastHeadingChangeMs > 60000)
+	{
+#if DEBUG_ENABLED && (DEBUG_STYLE == 0)
+		Serial.println(F("BNO055: heading stuck 60s, resetting..."));
+#endif
+		bnoReset();
 		return false;
 	}
 
@@ -1047,6 +1264,7 @@ static void cmdHelp()
 	Serial.println(F("  HEAD OFF - disable heading hold"));
 	Serial.println(F("  HEAD SET <deg> - set target to value"));
 	Serial.println(F("  HEAD TARGET - report current target"));
+	Serial.println(F("  HEAD RESET - force compass sensor reset"));
 	Serial.println(F("  TEST CONFIG - basic ConfigStore functionality test"));
 	Serial.println(F("  TEST SETDEBUG <name> <val> - detailed CFG SET debug"));
 	Serial.println(F("  RESET - disarm and neutral outputs"));
@@ -1218,6 +1436,14 @@ static void processLine(char *line)
 			{
 				Serial.print(F("HEADING bno="));
 				Serial.print(g_bnoOk ? 1 : 0);
+				Serial.print(F(" mode="));
+				Serial.print(ConfigStore::headingMode() == 1 ? F("IMU") : F("NDOF"));
+				Serial.print(F(" sys="));
+				Serial.print(g_bnoSysStatus);
+				Serial.print(F(" gyro="));
+				Serial.print(g_bnoGyroCalib);
+				Serial.print(F(" mag="));
+				Serial.print(g_bnoCalibStatus);
 				float curH;
 				if (g_bnoOk && readHeadingDeg(curH))
 				{
@@ -1416,7 +1642,13 @@ static void processLine(char *line)
 		{
 			Serial.print(F("HEADING bno="));
 			Serial.print(g_bnoOk ? 1 : 0);
-			Serial.print(F(" cal="));
+			Serial.print(F(" mode="));
+			Serial.print(ConfigStore::headingMode() == 1 ? F("IMU") : F("NDOF"));
+			Serial.print(F(" sys="));
+			Serial.print(g_bnoSysStatus);
+			Serial.print(F(" gyro="));
+			Serial.print(g_bnoGyroCalib);
+			Serial.print(F(" mag="));
 			Serial.print(g_bnoCalibStatus);
 			Serial.print(F(" fails="));
 			Serial.print(g_bnoReadFailures);
@@ -1615,6 +1847,27 @@ static void processLine(char *line)
 		{
 			Serial.print(F("HEAD TARGET="));
 			Serial.println(g_headingTargetDeg, 2);
+			return;
+		}
+		if (icmp(sub, "RESET") == 0)
+		{
+			// Force compass sensor reset
+			if (g_bnoOk)
+			{
+				Serial.println(F("Resetting BNO055..."));
+				if (bnoReset())
+				{
+					Serial.println(F("HEAD RESET OK"));
+				}
+				else
+				{
+					replyErr(F("reset failed"));
+				}
+			}
+			else
+			{
+				replyErr(F("no BNO055"));
+			}
 			return;
 		}
 		replyErr(F("bad HEAD sub"));

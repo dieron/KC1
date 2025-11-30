@@ -32,6 +32,9 @@
 #ifndef COMPASS_CORRECTION_DEG
 #define COMPASS_CORRECTION_DEG 0
 #endif
+#ifndef HEADING_MODE
+#define HEADING_MODE 0 // 0 = NDOF hybrid (default), 1 = IMUPLUS gyro-only
+#endif
 #ifndef HEADING_DEADBAND_DEG
 #define HEADING_DEADBAND_DEG 5.0f
 #endif
@@ -133,7 +136,8 @@ const ConfigStore::ConfigData ConfigStore::_defaults = {
 	(float)MOTOR_SCALE_L,
 	(float)MOTOR_SCALE_R,
 	(uint16_t)MOTOR_START_REGION,
-	(int16_t)COMPASS_CORRECTION_DEG};
+	(int16_t)COMPASS_CORRECTION_DEG,
+	(uint8_t)HEADING_MODE};
 bool ConfigStore::_dirty = false;
 
 // PROGMEM names
@@ -166,6 +170,7 @@ static const char n_motorStartUsR[] PROGMEM = "motor_start_us_r";
 static const char n_motorScaleL[] PROGMEM = "motor_scale_l";
 static const char n_motorScaleR[] PROGMEM = "motor_scale_r";
 static const char n_motorStartRegion[] PROGMEM = "motor_start_region";
+static const char n_headingMode[] PROGMEM = "heading_mode";
 
 ConfigStore::ConfigStore::Entry *ConfigStore::table()
 {
@@ -199,13 +204,14 @@ ConfigStore::ConfigStore::Entry *ConfigStore::table()
 		{(const __FlashStringHelper *)n_motorScaleR, PT_FLOAT, &_data.motorScaleR, &_defaults.motorScaleR},
 		{(const __FlashStringHelper *)n_motorStartRegion, PT_U16, &_data.motorStartRegion, &_defaults.motorStartRegion},
 		{(const __FlashStringHelper *)n_compassCorrectionDeg, PT_I16, &_data.compassCorrectionDeg, &_defaults.compassCorrectionDeg},
+		{(const __FlashStringHelper *)n_headingMode, PT_U8, &_data.headingMode, &_defaults.headingMode},
 	};
 	return entries;
 }
 
 size_t ConfigStore::tableSize()
 {
-	return 29; // keep in sync with entries above
+	return 30; // keep in sync with entries above
 }
 
 // ---------------- Metadata (schema) ----------------
@@ -238,6 +244,7 @@ static const char d_boost_max[] PROGMEM = "Max boost multiplier";
 static const char d_mstart[] PROGMEM = "Motor start offset";
 static const char d_mscale[] PROGMEM = "Motor scale";
 static const char d_mregion[] PROGMEM = "Start region";
+static const char d_headmode[] PROGMEM = "0=NDOF hybrid 1=IMUPLUS";
 
 static const ConfigStore::Meta kMeta[] = {
 	{(const __FlashStringHelper *)n_reverseLeft, ConfigStore::PT_U8, 0, 1, 1, (const __FlashStringHelper *)u_bool, (const __FlashStringHelper *)d_rev},
@@ -269,6 +276,7 @@ static const ConfigStore::Meta kMeta[] = {
 	{(const __FlashStringHelper *)n_motorScaleR, ConfigStore::PT_FLOAT, 0.5f, 1.5f, 0.01f, (const __FlashStringHelper *)u_none, (const __FlashStringHelper *)d_mscale},
 	{(const __FlashStringHelper *)n_motorStartRegion, ConfigStore::PT_U16, 0, 400, 1, (const __FlashStringHelper *)u_none, (const __FlashStringHelper *)d_mregion},
 	{(const __FlashStringHelper *)n_compassCorrectionDeg, ConfigStore::PT_I16, 0, 359, 1, (const __FlashStringHelper *)u_deg, (const __FlashStringHelper *)d_compass_corr},
+	{(const __FlashStringHelper *)n_headingMode, ConfigStore::PT_U8, 0, 1, 1, (const __FlashStringHelper *)u_none, (const __FlashStringHelper *)d_headmode},
 };
 
 const ConfigStore::Meta *ConfigStore::metaTable() { return kMeta; }
